@@ -120,6 +120,22 @@
     ];
   }
 
+  function amazonOfferFilterUrls(asin, filterId = "primeEligible") {
+    const productAsin = parseAsin(asin);
+    const normalizedFilter = String(filterId || "").trim();
+    if (!productAsin || !/^[A-Za-z][A-Za-z0-9]*$/.test(normalizedFilter))
+      return [];
+    const filters = encodeURIComponent(
+      JSON.stringify({ [normalizedFilter]: true }),
+    );
+    const query = `asin=${encodeURIComponent(productAsin)}&pc=dp`;
+    const refMarker = `aod_f_${normalizedFilter}`;
+    return [
+      `/gp/aod/ajax/ref=${refMarker}?${query}&experienceId=aodAjaxMain&filters=${filters}`,
+      `/gp/aod/ajax/ref=${refMarker}?${query}&filters=${filters}`,
+    ];
+  }
+
   function parseRankText(value) {
     const source = String(value || "")
       .replace(/[\u200e\u200f\u202a-\u202e]/g, " ")
@@ -214,9 +230,48 @@
     return candidates.length ? Math.max(...candidates) : null;
   }
 
+  function offerTotalFromFilterLabel(label, includesPinnedOffer = false) {
+    const text = asciiDigits(label)
+      .replace(/[\u200e\u200f\u202a-\u202e]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const match = text.match(/[0-9][0-9,.]*/);
+    const otherOffers = match
+      ? normalizeNumber(match[0])
+      : /\b(?:no|none|zero)\b/i.test(text)
+        ? 0
+        : null;
+    if (otherOffers === null) return null;
+    return otherOffers + (includesPinnedOffer ? 1 : 0);
+  }
+
+  function offerBreakdownFromPrimeFilter({
+    total,
+    primeTotal,
+    amazon = 0,
+  } = {}) {
+    const sellerTotal = normalizeNumber(total);
+    const primeSellerTotal = normalizeNumber(primeTotal);
+    const amazonSellers = Math.max(0, normalizeNumber(amazon) || 0);
+    if (sellerTotal === null || primeSellerTotal === null) return null;
+    const boundedTotal = Math.max(0, Math.trunc(sellerTotal));
+    const boundedPrime = Math.min(
+      boundedTotal,
+      Math.max(0, Math.trunc(primeSellerTotal)),
+    );
+    const boundedAmazon = Math.min(boundedPrime, Math.trunc(amazonSellers));
+    return {
+      total: boundedTotal,
+      fba: boundedPrime - boundedAmazon,
+      fbm: boundedTotal - boundedPrime,
+      amazon: boundedAmazon,
+      primeTotal: boundedPrime,
+    };
+  }
+
   function normalizeNumber(value) {
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
-    let text = String(value ?? "")
+    let text = asciiDigits(value)
       .replace(/[^0-9,.'\-]/g, "")
       .replace(/'/g, "");
     if (!text) return null;
@@ -226,6 +281,12 @@
     else text = text.replace(/,/g, "");
     const number = Number(text);
     return Number.isFinite(number) ? number : null;
+  }
+
+  function asciiDigits(value) {
+    return String(value ?? "")
+      .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+      .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
   }
 
   function normalizeDecimal(value) {
@@ -372,10 +433,13 @@
     marketplaceFromHost,
     parseAsin,
     amazonOfferPageUrls,
+    amazonOfferFilterUrls,
     parseRankText,
     categoryIntelligence,
     classifyFulfillment,
     resolveOfferTotal,
+    offerTotalFromFilterLabel,
+    offerBreakdownFromPrimeFilter,
     normalizeNumber,
     normalizeDecimal,
     money,

@@ -4,6 +4,18 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-18
+
+### Added
+
+- Read Amazon's `primeEligible` AOD filter count automatically without opening the Other Sellers drawer.
+- Derive FBA and FBM totals from Amazon's total-offer and Prime-filter counts, including the qualifying pinned Buy Box offer.
+
+### Changed
+
+- Keep Amazon Retail separate from the Prime/FBA count when an Amazon Retail offer is detected.
+- Use individual seller-card classification as a fallback when Amazon does not return the Prime-filter count.
+
 ## [0.2.2] - 2026-07-18
 
 ### Fixed

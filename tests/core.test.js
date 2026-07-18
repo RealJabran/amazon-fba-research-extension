@@ -36,6 +36,13 @@ test("uses Amazon's dedicated lazy-load route for every later offer page", () =>
   );
 });
 
+test("builds Amazon's Prime offer-filter request from inspected markup", () => {
+  const urls = Core.amazonOfferFilterUrls("B07MX7KPF2", "primeEligible");
+  assert.match(urls[0], /\/ref=aod_f_primeEligible\?/);
+  assert.match(urls[0], /filters=%7B%22primeEligible%22%3Atrue%7D/);
+  assert.deepEqual(Core.amazonOfferFilterUrls("invalid", "primeEligible"), []);
+});
+
 test("normalizes common marketplace number formats", () => {
   assert.equal(Core.normalizeNumber("$1,234.56"), 1234.56);
   assert.equal(Core.normalizeNumber("£1.234,56"), 1234.56);
@@ -135,5 +142,30 @@ test("adds the pinned Buy Box seller to Amazon's other-options count", () => {
       hasPinnedOffer: true,
     }),
     18,
+  );
+});
+
+test("derives FBA and FBM totals from Amazon's Prime filter count", () => {
+  assert.equal(Core.offerTotalFromFilterLabel("17 other options", true), 18);
+  assert.equal(Core.offerTotalFromFilterLabel("12 other options", true), 13);
+  assert.equal(Core.offerTotalFromFilterLabel("١٢ خيارًا آخر", true), 13);
+  assert.deepEqual(
+    Core.offerBreakdownFromPrimeFilter({
+      total: 18,
+      primeTotal: 13,
+      amazon: 0,
+    }),
+    { total: 18, fba: 13, fbm: 5, amazon: 0, primeTotal: 13 },
+  );
+});
+
+test("keeps Amazon Retail separate from Prime-filtered FBA sellers", () => {
+  assert.deepEqual(
+    Core.offerBreakdownFromPrimeFilter({
+      total: 18,
+      primeTotal: 13,
+      amazon: 1,
+    }),
+    { total: 18, fba: 12, fbm: 5, amazon: 1, primeTotal: 13 },
   );
 });

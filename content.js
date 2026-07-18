@@ -292,26 +292,38 @@
     };
   }
 
-  function observedOfferTotal() {
+  function observedOfferTotal(featured = null) {
     const source = firstText([
       "#aod-ingress-link",
       "#aod-ingress-link .a-size-small",
       "#olpLinkWidget_feature_div",
       "#mbc",
     ]);
-    const match = source.match(
-      /(?:New|Used|Other sellers|offers?)\s*\(?([0-9][0-9,]*)\)?|\(([0-9][0-9,]*)\)/i,
+    const match =
+      source.match(/([0-9][0-9,]*)\s+other\s+(?:options?|offers?|sellers?)/i) ||
+      source.match(
+        /(?:New|Used|Other sellers|offers?)\s*\(?([0-9][0-9,]*)\)?|\(([0-9][0-9,]*)\)/i,
+      );
+    if (!match) return null;
+    const count = Number((match[1] || match[2]).replace(/,/g, ""));
+    const excludesFeatured = /\bother\s+(?:options?|offers?|sellers?)\b/i.test(
+      source,
     );
-    return match ? Number((match[1] || match[2]).replace(/,/g, "")) : null;
+    return count + (featured && excludesFeatured ? 1 : 0);
   }
 
   function offerTotalFromDocument(doc, ingressTotal = null) {
     const countNode = doc.querySelector("#aod-total-offer-count");
     const labelNode = doc.querySelector("#aod-total-offer-count-string");
+    const filterLabel = clean(
+      doc.querySelector("#aod-filter-offer-count-string")?.textContent || "",
+    );
     return Core.resolveOfferTotal({
       ingressTotal,
-      hiddenCount: countNode?.value || countNode?.getAttribute("value") || "",
-      hiddenLabel: labelNode?.value || labelNode?.getAttribute("value") || "",
+      hiddenCount:
+        countNode?.value || countNode?.getAttribute("value") || filterLabel,
+      hiddenLabel:
+        labelNode?.value || labelNode?.getAttribute("value") || filterLabel,
       hasPinnedOffer: Boolean(
         doc.querySelector("#aod-sticky-pinned-offer, #aod-pinned-offer"),
       ),
@@ -474,6 +486,48 @@
     return fallback;
   }
 
+  async function fetchPrimeOfferTotal(featured) {
+    for (const url of Core.amazonOfferFilterUrls(
+      product.asin,
+      "primeEligible",
+    )) {
+      let response;
+      try {
+        response = await fetch(url, {
+          credentials: "include",
+          cache: "no-store",
+          headers: {
+            Accept: "text/html, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+        });
+      } catch (_) {
+        continue;
+      }
+      if (!response.ok) continue;
+      const html = await response.text();
+      if (!html || /validateCaptcha|enter the characters you see/i.test(html))
+        continue;
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const label = clean(
+        doc.querySelector("#aod-filter-offer-count-string")?.textContent ||
+          doc.querySelector("#aod-total-offer-count-string")?.value ||
+          "",
+      );
+      if (!label) continue;
+      const filteredPinnedOffer = Boolean(
+        doc.querySelector("#aod-sticky-pinned-offer, #aod-pinned-offer"),
+      );
+      const featuredIsPrime = ["FBA", "Amazon"].includes(featured?.fulfillment);
+      const total = Core.offerTotalFromFilterLabel(
+        label,
+        filteredPinnedOffer || featuredIsPrime,
+      );
+      if (total !== null) return total;
+    }
+    return null;
+  }
+
   async function loadOffers(force = false) {
     if (!product?.asin || (offers.status === "loading" && !force)) return;
     offers = { ...offers, status: "loading" };
@@ -482,7 +536,9 @@
       const unique = new Map();
       const featured = featuredOffer();
       if (featured) addObservedSeller(unique, featured);
-      let advertisedTotal = observedOfferTotal();
+      const primeTotalPromise = fetchPrimeOfferTotal(featured);
+      let primeTotal = null;
+      let advertisedTotal = observedOfferTotal(featured);
       let loadedDocument = false;
       const liveDocument = document.querySelector("#aod-container")
         ? document
@@ -507,6 +563,17 @@
         offerNodes(doc)
           .map(classifyOffer)
           .forEach((seller) => addObservedSeller(unique, seller));
+        if (page === 1) {
+          primeTotal = await primeTotalPromise;
+          const earlyBreakdown = Core.offerBreakdownFromPrimeFilter({
+            total: advertisedTotal || unique.size,
+            primeTotal,
+            amazon: [...unique.values()].filter(
+              (seller) => seller.fulfillment === "Amazon",
+            ).length,
+          });
+          if (earlyBreakdown) break;
+        }
         const hasNext = Boolean(
           doc.querySelector(
             "#aod-pagn-next-link, .a-pagination .a-last:not(.a-disabled)",
@@ -517,26 +584,41 @@
         if (!advertisedTotal && !hasNext) break;
       }
       const sellers = [...unique.values()];
-      const complete = Boolean(
+      const sellersComplete = Boolean(
         sellers.length &&
         (!advertisedTotal || sellers.length >= advertisedTotal),
       );
-      offers = {
-        status: sellers.length
-          ? complete
-            ? "observed"
-            : "partial"
-          : loadedDocument
-            ? "unavailable"
-            : "error",
-        sellers,
+      const observedAmazon = sellers.filter(
+        (seller) => seller.fulfillment === "Amazon",
+      ).length;
+      primeTotal ??= await primeTotalPromise;
+      const primeBreakdown = Core.offerBreakdownFromPrimeFilter({
         total: advertisedTotal || sellers.length,
+        primeTotal,
+        amazon: observedAmazon,
+      });
+      const complete = Boolean(primeBreakdown || sellersComplete);
+      offers = {
+        status: complete
+          ? "observed"
+          : sellers.length
+            ? "partial"
+            : loadedDocument
+              ? "unavailable"
+              : "error",
+        sellers,
+        total: primeBreakdown?.total ?? advertisedTotal ?? sellers.length,
         loaded: sellers.length,
         complete,
-        fba: sellers.filter((seller) => seller.fulfillment === "FBA").length,
-        fbm: sellers.filter((seller) => seller.fulfillment === "FBM").length,
-        amazon: sellers.filter((seller) => seller.fulfillment === "Amazon")
-          .length,
+        source: primeBreakdown ? "amazon-prime-filter" : "seller-cards",
+        primeTotal: primeBreakdown?.primeTotal ?? null,
+        fba:
+          primeBreakdown?.fba ??
+          sellers.filter((seller) => seller.fulfillment === "FBA").length,
+        fbm:
+          primeBreakdown?.fbm ??
+          sellers.filter((seller) => seller.fulfillment === "FBM").length,
+        amazon: primeBreakdown?.amazon ?? observedAmazon,
         observedAt: new Date().toISOString(),
         error:
           !sellers.length && !loadedDocument
@@ -545,7 +627,7 @@
               ? `Amazon reports ${advertisedTotal} sellers; ${sellers.length} have been classified so far`
               : "",
       };
-      if (!sellers.length)
+      if (!sellers.length && !primeBreakdown)
         Object.assign(offers, {
           fba: null,
           fbm: null,
@@ -670,7 +752,7 @@
                   ? `<div class="rp-card">
                 <div class="rp-card-title"><h4>Observed offers</h4><button id="rp-refresh-offers" class="link">Refresh</button></div>
                 <div class="rp-grid offers">${metric("FBA", displayedOfferCount(offers.fba))}${metric("FBM", displayedOfferCount(offers.fbm))}${metric("Amazon", displayedOfferCount(offers.amazon))}${metric("Total sellers", offers.total ?? "—")}</div>
-                <p class="rp-note">${offers.status === "partial" ? `${escapeHtml(offers.error)}. Use Refresh to retry Amazon’s remaining offer pages.` : "Counts are unique sellers classified automatically from Amazon’s current offer list for this browser and delivery location."}</p>
+                <p class="rp-note">${offers.status === "partial" ? `${escapeHtml(offers.error)}. Use Refresh to retry Amazon’s remaining offer pages.` : offers.source === "amazon-prime-filter" ? "FBA and FBM totals use Amazon’s own total and Prime-filter counts. Amazon Retail is shown separately when detected." : "Counts are unique sellers classified automatically from Amazon’s current offer list for this browser and delivery location."}</p>
                 <div class="rp-sellers">${
                   offers.sellers
                     .slice(0, 30)
