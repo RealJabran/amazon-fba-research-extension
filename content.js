@@ -61,6 +61,8 @@
       "#detailBullets_feature_div",
       "#productDetails_detailBullets_sections1",
       "#productDetails_techSpec_section_1",
+      "#productOverview_feature_div",
+      "#poExpander",
       "#prodDetails",
     ]
       .map((selector) => text(selector))
@@ -69,6 +71,24 @@
   }
 
   function labeledDetail(labelPattern) {
+    const labelRegex = new RegExp(labelPattern, "i");
+    const candidates = [
+      ...document.querySelectorAll(
+        "#detailBullets_feature_div li, #detailBulletsWrapper_feature_div li, #productDetails_detailBullets_sections1 tr, #productDetails_techSpec_section_1 tr, #productDetails_db_sections tr, #productOverview_feature_div tr, #poExpander tr, #prodDetails tr",
+      ),
+    ];
+    for (const node of candidates) {
+      const label = clean(
+        node.querySelector("th, .a-text-bold, .prodDetSectionEntry")
+          ?.textContent || "",
+      ).replace(/[:：]$/, "");
+      if (!labelRegex.test(label)) continue;
+      const value = clean(
+        node.querySelector("td, .prodDetAttrValue")?.textContent ||
+          node.textContent.replace(label, ""),
+      ).replace(/^[：:]\s*/, "");
+      if (value) return value;
+    }
     const raw = detailText();
     const match = raw.match(
       new RegExp(`${labelPattern}\\s*[:：]?\\s*([^\\n]+)`, "i"),
@@ -177,6 +197,40 @@
     render();
   }
 
+  function offerFieldByLabel(node, labelPattern) {
+    const labelRegex = new RegExp(`^${labelPattern}\\b`, "i");
+    const rows = [...node.querySelectorAll(".a-row, .a-section, li, tr")];
+    for (const row of rows) {
+      const children = [...row.children].filter((child) =>
+        clean(child.textContent),
+      );
+      const labelIndex = children.findIndex((child) =>
+        labelRegex.test(clean(child.textContent).replace(/[:：]$/, "")),
+      );
+      if (labelIndex < 0) continue;
+      const value = clean(
+        children
+          .slice(labelIndex + 1)
+          .map((child) => child.textContent)
+          .join(" "),
+      );
+      if (value) return value;
+      const rowText = clean(row.textContent);
+      const match = rowText.match(
+        new RegExp(`${labelPattern}\\s*[:：]?\\s*(.+)`, "i"),
+      );
+      if (match?.[1]) return clean(match[1]);
+    }
+    const fullText = clean(node.textContent);
+    const match = fullText.match(
+      new RegExp(
+        `${labelPattern}\\s*[:：]?\\s*(.+?)(?=\\s+(?:Sold by|Seller|Fulfilled by|Ships from|Dispatches from|Condition)\\b|$)`,
+        "i",
+      ),
+    );
+    return clean(match?.[1] || "");
+  }
+
   function classifyOffer(node) {
     const fieldText = (selector) => {
       const field = node.querySelector(selector);
@@ -191,12 +245,20 @@
     )
       .replace(/^(Ships from|Dispatches from|الشحن من)\s*:?\s*/i, "")
       .trim();
+    const fulfilledBy = (
+      fieldText(
+        "#aod-offer-fulfilledBy, [id*='fulfilledBy'], [id*='fulfillment'], [id*='fulfiller']",
+      ) || offerFieldByLabel(node, "Fulfilled by|Fulfillment by|الشحن بواسطة")
+    )
+      .replace(/^(Fulfilled by|Fulfillment by|الشحن بواسطة)\s*:?\s*/i, "")
+      .trim();
     const soldByNode = node.querySelector(
       "#aod-offer-soldBy a, [id*='soldBy'] a, [id*='sold-by'] a, a[href*='seller=']",
     );
     const soldBy = clean(
       soldByNode?.textContent ||
-        fieldText("#aod-offer-soldBy, [id*='soldBy'], [id*='sold-by']"),
+        fieldText("#aod-offer-soldBy, [id*='soldBy'], [id*='sold-by']") ||
+        offerFieldByLabel(node, "Sold by|Seller|البائع"),
     )
       .replace(/^(Sold by|Seller|البائع)\s*:?\s*/i, "")
       .trim();
@@ -213,8 +275,8 @@
     return {
       name: soldBy || "Unknown seller",
       sellerId,
-      fulfillment: Core.classifyFulfillment(soldBy, shipsFrom),
-      shipsFrom,
+      fulfillment: Core.classifyFulfillment(soldBy, fulfilledBy || shipsFrom),
+      shipsFrom: fulfilledBy || shipsFrom,
     };
   }
 
