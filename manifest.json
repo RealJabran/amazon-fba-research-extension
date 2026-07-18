@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "RizPoint FBA Research",
+  "version": "0.1.0",
+  "description": "Research Amazon products with marketplace-aware fees, profit, offers, BSR and copy tools.",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.amazon.co.uk/*",
+    "https://*.amazon.ae/*",
+    "https://*.amazon.sa/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "RizPoint FBA Research",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.amazon.com/*",
+        "https://*.amazon.co.uk/*",
+        "https://*.amazon.ae/*",
+        "https://*.amazon.sa/*"
+      ],
+      "js": ["shared/core.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

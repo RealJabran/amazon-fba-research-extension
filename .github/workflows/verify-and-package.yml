@@ -1,0 +1,41 @@
+name: Verify and package extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - name: Build installable ZIP
+        shell: bash
+        run: |
+          mkdir -p dist/extension
+          cp manifest.json background.js content.js dist/extension/
+          cp -R popup options shared icons dist/extension/
+          cd dist
+          zip -r "rizpoint-fba-research-${GITHUB_REF_NAME}.zip" extension
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rizpoint-fba-research-${{ github.ref_name }}
+          path: dist/*.zip
+          if-no-files-found: error
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes --title "RizPoint FBA Research $GITHUB_REF_NAME"

@@ -1,0 +1,270 @@
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.RizPointCore = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const MARKETPLACES = Object.freeze({
+    "amazon.com": {
+      id: "US",
+      label: "Amazon USA",
+      flag: "🇺🇸",
+      currency: "USD",
+      symbol: "$",
+      sellerCentral: "sellercentral.amazon.com",
+      countryCode: "US",
+      locale: "en-US",
+      lang: "en_US",
+      vatRate: 0,
+    },
+    "amazon.co.uk": {
+      id: "UK",
+      label: "Amazon UK",
+      flag: "🇬🇧",
+      currency: "GBP",
+      symbol: "£",
+      sellerCentral: "sellercentral.amazon.co.uk",
+      countryCode: "GB",
+      locale: "en-GB",
+      lang: "en_GB",
+      vatRate: 20,
+    },
+    "amazon.ae": {
+      id: "AE",
+      label: "Amazon UAE",
+      flag: "🇦🇪",
+      currency: "AED",
+      symbol: "AED ",
+      sellerCentral: "sellercentral.amazon.ae",
+      countryCode: "AE",
+      locale: "en-AE",
+      lang: "en_AE",
+      vatRate: 5,
+    },
+    "amazon.sa": {
+      id: "SA",
+      label: "Amazon Saudi Arabia",
+      flag: "🇸🇦",
+      currency: "SAR",
+      symbol: "SAR ",
+      sellerCentral: "sellercentral.amazon.sa",
+      countryCode: "SA",
+      locale: "en-SA",
+      lang: "en_SA",
+      vatRate: 15,
+    },
+  });
+
+  const DEFAULT_SETTINGS = Object.freeze({
+    showFloatingWidget: true,
+    autoLoadOfficialFees: true,
+    autoLoadOffers: true,
+    includeStorageFee: false,
+    includeTaxReserve: false,
+    taxRateOverride: "",
+    defaultProductCost: "",
+    defaultPrepFee: "",
+    defaultInboundShipping: "",
+    defaultOtherCost: "",
+    visible: {
+      asin: true,
+      category: true,
+      bsr: true,
+      buyBox: true,
+      offers: true,
+      dimensions: true,
+      fees: true,
+      profit: true,
+      roi: true,
+      margin: true,
+    },
+  });
+
+  function marketplaceFromHost(hostname) {
+    const host = String(hostname || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+    return (
+      Object.entries(MARKETPLACES).find(
+        ([domain]) => host === domain || host.endsWith(`.${domain}`),
+      )?.[1] || null
+    );
+  }
+
+  function parseAsin(value) {
+    const text = String(value || "");
+    const urlMatch = text.match(
+      /\/(?:dp|gp\/product|gp\/aw\/d|product)\/([A-Z0-9]{10})(?:[/?]|$)/i,
+    );
+    if (urlMatch) return urlMatch[1].toUpperCase();
+    const exact = text.trim().match(/^[A-Z0-9]{10}$/i);
+    return exact ? exact[0].toUpperCase() : null;
+  }
+
+  function normalizeNumber(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    let text = String(value ?? "")
+      .replace(/[^0-9,.'\-]/g, "")
+      .replace(/'/g, "");
+    if (!text) return null;
+    const comma = text.lastIndexOf(",");
+    const dot = text.lastIndexOf(".");
+    if (comma > dot) text = text.replace(/\./g, "").replace(",", ".");
+    else text = text.replace(/,/g, "");
+    const number = Number(text);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function normalizeDecimal(value) {
+    if (value === null || value === undefined || value === "") return null;
+    let text = String(value)
+      .trim()
+      .replace(/[^0-9,.'\-]/g, "")
+      .replace(/'/g, "");
+    if (!text || text === "-") return null;
+    const comma = text.lastIndexOf(",");
+    const dot = text.lastIndexOf(".");
+    if (comma > dot) text = text.replace(/\./g, "").replace(",", ".");
+    else text = text.replace(/,/g, "");
+    if (!/^-?\d+(?:\.\d+)?$/.test(text)) return null;
+    const negative = text.startsWith("-");
+    const [whole, fraction = ""] = text.replace("-", "").split(".");
+    const normalized = `${negative ? "-" : ""}${BigInt(whole).toString()}${fraction ? `.${fraction.replace(/0+$/, "")}` : ""}`;
+    return normalized.endsWith(".") ? normalized.slice(0, -1) : normalized;
+  }
+
+  const SCALE = 10000n;
+  function toScaled(value) {
+    const decimal = normalizeDecimal(value) || "0";
+    const negative = decimal.startsWith("-");
+    const [whole, fraction = ""] = decimal.replace("-", "").split(".");
+    const padded = `${fraction}00000`;
+    let scaled = BigInt(whole) * SCALE + BigInt(padded.slice(0, 4));
+    if ((padded[4] || "0") >= "5") scaled += 1n;
+    return negative ? -scaled : scaled;
+  }
+
+  function divideHalfUp(numerator, denominator) {
+    if (denominator === 0n) return null;
+    const negative = numerator < 0n !== denominator < 0n;
+    const a = numerator < 0n ? -numerator : numerator;
+    const b = denominator < 0n ? -denominator : denominator;
+    const quotient = (a + b / 2n) / b;
+    return negative ? -quotient : quotient;
+  }
+
+  function scaledString(value, decimals = 2) {
+    const factor = 10n ** BigInt(4 - decimals);
+    const rounded = divideHalfUp(value, factor);
+    const negative = rounded < 0n;
+    const absolute = negative ? -rounded : rounded;
+    const base = 10n ** BigInt(decimals);
+    const whole = absolute / base;
+    const fraction = (absolute % base).toString().padStart(decimals, "0");
+    return `${negative ? "-" : ""}${whole}${decimals ? `.${fraction}` : ""}`;
+  }
+
+  function sumDecimals(values, decimals = 4) {
+    return scaledString(
+      values.reduce((sum, value) => sum + toScaled(value), 0n),
+      decimals,
+    );
+  }
+
+  function money(value, marketplace) {
+    const amount = normalizeNumber(value);
+    if (amount === null) return "—";
+    try {
+      return new Intl.NumberFormat(marketplace?.locale || "en-US", {
+        style: "currency",
+        currency: marketplace?.currency || "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch (_) {
+      return `${marketplace?.symbol || "$"}${amount.toFixed(2)}`;
+    }
+  }
+
+  function calculateProfit(input) {
+    const salePrice = toScaled(input.salePrice);
+    const productCost = toScaled(input.productCost);
+    const prepFee = toScaled(input.prepFee);
+    const inboundShipping = toScaled(input.inboundShipping);
+    const otherCost = toScaled(input.otherCost);
+    const feeComponents = input.feeComponents || {};
+    const referralFee = toScaled(feeComponents.referralFee);
+    const fulfillmentFee = toScaled(feeComponents.fulfillmentFee);
+    const closingFee = toScaled(feeComponents.closingFee);
+    const digitalServicesFee = toScaled(feeComponents.digitalServicesFee);
+    const otherAmazonFee = toScaled(feeComponents.otherAmazonFee);
+    const storageFee = input.includeStorageFee
+      ? toScaled(feeComponents.storageFee)
+      : 0n;
+    const taxRate = input.includeTaxReserve ? toScaled(input.taxRate) : 0n;
+    const taxNet =
+      taxRate > 0n
+        ? divideHalfUp(salePrice * 100n * SCALE, 100n * SCALE + taxRate)
+        : salePrice;
+    const taxReserve = salePrice - taxNet;
+    const amazonFees =
+      referralFee +
+      fulfillmentFee +
+      closingFee +
+      digitalServicesFee +
+      otherAmazonFee +
+      storageFee;
+    const landedCost = productCost + prepFee + inboundShipping + otherCost;
+    const profit = salePrice - amazonFees - landedCost - taxReserve;
+    const ratio = (numerator, denominator) =>
+      denominator > 0n
+        ? scaledString(divideHalfUp(numerator * 100n * SCALE, denominator), 2)
+        : null;
+    return {
+      salePrice: scaledString(salePrice),
+      amazonFees: scaledString(amazonFees),
+      landedCost: scaledString(landedCost),
+      taxReserve: scaledString(taxReserve),
+      profit: scaledString(profit),
+      profitSign: profit > 0n ? 1 : profit < 0n ? -1 : 0,
+      margin: ratio(profit, salePrice),
+      roi: ratio(profit, landedCost),
+      netPayout: scaledString(salePrice - amazonFees - taxReserve),
+      components: {
+        referralFee: scaledString(referralFee),
+        fulfillmentFee: scaledString(fulfillmentFee),
+        closingFee: scaledString(closingFee),
+        digitalServicesFee: scaledString(digitalServicesFee),
+        otherAmazonFee: scaledString(otherAmazonFee),
+        storageFee: scaledString(storageFee),
+      },
+    };
+  }
+
+  function calculatorUrl(marketplace) {
+    return `https://${marketplace.sellerCentral}/revcalpublic?lang=${marketplace.lang}`;
+  }
+
+  function mergeSettings(stored) {
+    return {
+      ...DEFAULT_SETTINGS,
+      ...(stored || {}),
+      visible: { ...DEFAULT_SETTINGS.visible, ...(stored?.visible || {}) },
+    };
+  }
+
+  return {
+    MARKETPLACES,
+    DEFAULT_SETTINGS,
+    marketplaceFromHost,
+    parseAsin,
+    normalizeNumber,
+    normalizeDecimal,
+    money,
+    sumDecimals,
+    calculateProfit,
+    calculatorUrl,
+    mergeSettings,
+  };
+});

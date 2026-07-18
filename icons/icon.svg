@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">RizPoint FBA Research</title>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#176e42"/>
+      <stop offset="1" stop-color="#102a20"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <path d="M31 91V66h13v25H31Zm26 0V48h14v43H57Zm27 0V29h14v62H84Z" fill="#fff" opacity=".96"/>
+  <path d="m28 50 25-14 17 6 27-18" fill="none" stroke="#8ff0b4" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="28" cy="50" r="5" fill="#8ff0b4"/>
+  <circle cx="53" cy="36" r="5" fill="#8ff0b4"/>
+  <circle cx="70" cy="42" r="5" fill="#8ff0b4"/>
+  <circle cx="97" cy="24" r="5" fill="#8ff0b4"/>
+  <path d="M23 101h82" stroke="#8ff0b4" stroke-width="6" stroke-linecap="round"/>
+</svg>
