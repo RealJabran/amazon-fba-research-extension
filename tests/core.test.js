@@ -102,4 +102,25 @@ test("classifies Amazon retail, FBA and FBM fulfillment", () => {
     Core.classifyFulfillment("Sunny Trading", "Sunny Trading"),
     "FBM",
   );
+  assert.equal(Core.classifyFulfillment("Sunny Trading", "", true), "FBA");
+});
+
+test("adds the pinned Buy Box seller to Amazon's other-options count", () => {
+  assert.equal(
+    Core.resolveOfferTotal({
+      hiddenCount: "17",
+      hiddenLabel: "17 other options",
+      hasPinnedOffer: true,
+    }),
+    18,
+  );
+  assert.equal(
+    Core.resolveOfferTotal({
+      ingressTotal: "18",
+      hiddenCount: "17",
+      hiddenLabel: "17 other options",
+      hasPinnedOffer: true,
+    }),
+    18,
+  );
 });

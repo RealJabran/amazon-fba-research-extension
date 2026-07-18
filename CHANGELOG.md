@@ -4,6 +4,21 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-18
+
+### Fixed
+
+- Read Amazon's hidden `aod-total-offer-count` and include the pinned Buy Box seller when Amazon labels the count as "other options".
+- Use Amazon's `isAmazonFulfilled=1` seller-link signal to classify FBA offers even when the fulfillment label is hidden or localized.
+- Parse only complete offer cards instead of matching nested `aod-offer-*` detail elements as sellers.
+- Continue loading AOD pages until Amazon's advertised seller total is reached or no additional sellers are returned.
+- Reclassify from Amazon's live All Offers panel automatically when it is opened.
+
+### Changed
+
+- Partial FBA, FBM, and Amazon counts are marked with `+` instead of being presented as complete totals.
+- The analysis now distinguishes Amazon's total seller count from the number of seller cards classified so far.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

@@ -30,6 +30,8 @@
   let overviewShadow;
   let lastFingerprint = "";
   let refreshTimer;
+  let aodRefreshTimer;
+  let observedAodContainer;
 
   const text = (selector) =>
     document.querySelector(selector)?.textContent?.trim() || "";
@@ -263,19 +265,29 @@
       .replace(/^(Sold by|Seller|البائع)\s*:?\s*/i, "")
       .trim();
     let sellerId = soldBy;
+    let isAmazonFulfilled = Boolean(
+      node.querySelector("a[href*='isAmazonFulfilled=1']"),
+    );
     try {
       const sellerUrl = new URL(soldByNode?.href || location.href);
       sellerId =
         sellerUrl.searchParams.get("seller") ||
         sellerUrl.searchParams.get("me") ||
         soldBy;
+      isAmazonFulfilled =
+        isAmazonFulfilled ||
+        sellerUrl.searchParams.get("isAmazonFulfilled") === "1";
     } catch (_) {
       sellerId = soldBy;
     }
     return {
       name: soldBy || "Unknown seller",
       sellerId,
-      fulfillment: Core.classifyFulfillment(soldBy, fulfilledBy || shipsFrom),
+      fulfillment: Core.classifyFulfillment(
+        soldBy,
+        fulfilledBy || shipsFrom,
+        isAmazonFulfilled,
+      ),
       shipsFrom: fulfilledBy || shipsFrom,
     };
   }
@@ -291,6 +303,50 @@
       /(?:New|Used|Other sellers|offers?)\s*\(?([0-9][0-9,]*)\)?|\(([0-9][0-9,]*)\)/i,
     );
     return match ? Number((match[1] || match[2]).replace(/,/g, "")) : null;
+  }
+
+  function offerTotalFromDocument(doc, ingressTotal = null) {
+    const countNode = doc.querySelector("#aod-total-offer-count");
+    const labelNode = doc.querySelector("#aod-total-offer-count-string");
+    return Core.resolveOfferTotal({
+      ingressTotal,
+      hiddenCount: countNode?.value || countNode?.getAttribute("value") || "",
+      hiddenLabel: labelNode?.value || labelNode?.getAttribute("value") || "",
+      hasPinnedOffer: Boolean(
+        doc.querySelector("#aod-sticky-pinned-offer, #aod-pinned-offer"),
+      ),
+    });
+  }
+
+  function offerNodes(doc) {
+    return [
+      ...doc.querySelectorAll(
+        "#aod-sticky-pinned-offer, #aod-pinned-offer, #aod-offer, .aod-offer",
+      ),
+    ];
+  }
+
+  function addObservedSeller(unique, seller) {
+    if (seller.name === "Unknown seller" && !seller.shipsFrom) return false;
+    const normalizedName = seller.name.toLowerCase().replace(/\s+/g, " ");
+    const existing = [...unique.entries()].find(
+      ([, item]) =>
+        (seller.sellerId && item.sellerId === seller.sellerId) ||
+        item.name.toLowerCase().replace(/\s+/g, " ") === normalizedName,
+    );
+    if (existing) {
+      unique.set(existing[0], {
+        ...existing[1],
+        ...seller,
+        sellerId: seller.sellerId || existing[1].sellerId,
+      });
+      return false;
+    }
+    unique.set(
+      seller.sellerId || normalizedName || `seller-${unique.size + 1}`,
+      seller,
+    );
+    return true;
   }
 
   function offerIngressUrls(page = 1) {
@@ -385,42 +441,56 @@
     try {
       const unique = new Map();
       const featured = featuredOffer();
-      if (featured) unique.set(featured.sellerId || featured.name, featured);
+      if (featured) addObservedSeller(unique, featured);
+      let advertisedTotal = observedOfferTotal();
       let loadedDocument = false;
-      for (let page = 1; page <= 5; page += 1) {
+      const liveDocument = document.querySelector("#aod-container")
+        ? document
+        : null;
+      if (liveDocument) {
+        loadedDocument = true;
+        advertisedTotal = offerTotalFromDocument(liveDocument, advertisedTotal);
+        offerNodes(liveDocument)
+          .map(classifyOffer)
+          .forEach((seller) => addObservedSeller(unique, seller));
+      }
+      let stagnantPages = 0;
+      for (let page = 1; page <= 20; page += 1) {
+        if (advertisedTotal && unique.size >= advertisedTotal) break;
         const doc = await fetchOfferDocument(page);
         if (!doc) break;
         loadedDocument = true;
         const before = unique.size;
-        const nodes = [
-          ...doc.querySelectorAll(
-            "#aod-offer, .aod-offer, #aod-pinned-offer, [id^='aod-offer-']",
-          ),
-        ];
-        nodes.map(classifyOffer).forEach((seller) => {
-          if (seller.name === "Unknown seller" && !seller.shipsFrom) return;
-          unique.set(
-            seller.sellerId || `${seller.name}:${seller.fulfillment}`,
-            seller,
-          );
-        });
+        advertisedTotal = offerTotalFromDocument(doc, advertisedTotal);
+        offerNodes(doc)
+          .map(classifyOffer)
+          .forEach((seller) => addObservedSeller(unique, seller));
         const hasNext = Boolean(
           doc.querySelector(
             "#aod-pagn-next-link, .a-pagination .a-last:not(.a-disabled)",
           ),
         );
-        if (!hasNext || unique.size === before) break;
+        stagnantPages = unique.size === before ? stagnantPages + 1 : 0;
+        if (stagnantPages >= 2) break;
+        if (!advertisedTotal && !hasNext) break;
       }
       const sellers = [...unique.values()];
-      const advertisedTotal = observedOfferTotal();
+      const complete = Boolean(
+        sellers.length &&
+        (!advertisedTotal || sellers.length >= advertisedTotal),
+      );
       offers = {
         status: sellers.length
-          ? "observed"
+          ? complete
+            ? "observed"
+            : "partial"
           : loadedDocument
             ? "unavailable"
             : "error",
         sellers,
         total: advertisedTotal || sellers.length,
+        loaded: sellers.length,
+        complete,
         fba: sellers.filter((seller) => seller.fulfillment === "FBA").length,
         fbm: sellers.filter((seller) => seller.fulfillment === "FBM").length,
         amazon: sellers.filter((seller) => seller.fulfillment === "Amazon")
@@ -429,7 +499,9 @@
         error:
           !sellers.length && !loadedDocument
             ? "Amazon did not return the offer list to this browser session"
-            : "",
+            : !complete && advertisedTotal
+              ? `Amazon reports ${advertisedTotal} sellers; ${sellers.length} have been classified so far`
+              : "",
       };
       if (!sellers.length)
         Object.assign(offers, {
@@ -482,6 +554,11 @@
 
   function metric(label, value, className = "") {
     return `<div class="rp-metric ${className}"><span>${label}</span><strong>${value}</strong></div>`;
+  }
+
+  function displayedOfferCount(value) {
+    if (value === null || value === undefined) return "—";
+    return offers.complete === false ? `${value}+` : value;
   }
 
   function listingInfo() {
@@ -550,11 +627,11 @@
                 visible.offers
                   ? `<div class="rp-card">
                 <div class="rp-card-title"><h4>Observed offers</h4><button id="rp-refresh-offers" class="link">Refresh</button></div>
-                <div class="rp-grid offers">${metric("FBA", offers.fba ?? "—")}${metric("FBM", offers.fbm ?? "—")}${metric("Amazon", offers.amazon ?? "—")}${metric("Total loaded", offers.total ?? "—")}</div>
-                <p class="rp-note">Counts are unique offers Amazon returned to this browser. Hidden, paginated, location-ineligible, or suppressed offers may not be included.</p>
+                <div class="rp-grid offers">${metric("FBA", displayedOfferCount(offers.fba))}${metric("FBM", displayedOfferCount(offers.fbm))}${metric("Amazon", displayedOfferCount(offers.amazon))}${metric("Total sellers", offers.total ?? "—")}</div>
+                <p class="rp-note">${offers.status === "partial" ? `${escapeHtml(offers.error)}. Open Amazon’s “See all buying options” panel once to let the extension classify the remaining sellers automatically.` : "Counts are unique sellers classified from Amazon’s current offer list for this browser and delivery location."}</p>
                 <div class="rp-sellers">${
                   offers.sellers
-                    .slice(0, 12)
+                    .slice(0, 30)
                     .map(
                       (seller) =>
                         `<div><span>${escapeHtml(seller.name)}</span><b class="${seller.fulfillment.toLowerCase()}">${seller.fulfillment}</b></div>`,
@@ -638,9 +715,9 @@
           ${overviewLine("ASIN", product.asin, true)}
           ${overviewLine("Parent category", listing.parentCategory || "Unavailable", Boolean(listing.parentCategory))}
           ${overviewLine("Parent BSR", listing.parentBsr ? `#${Number(listing.parentBsr).toLocaleString()}` : "Unavailable", Boolean(listing.parentBsr))}
-          ${overviewLine("Current FBA sellers", offers.fba ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
-          ${overviewLine("Current FBM sellers", offers.fbm ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
-          ${overviewLine("Total current offers", offers.total ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
+          ${overviewLine("Current FBA sellers", offers.status === "loading" ? "Loading…" : offers.fba === null ? "Unavailable" : displayedOfferCount(offers.fba))}
+          ${overviewLine("Current FBM sellers", offers.status === "loading" ? "Loading…" : offers.fbm === null ? "Unavailable" : displayedOfferCount(offers.fbm))}
+          ${overviewLine("Total current sellers", offers.total ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
         </div>
         <div class="overview-status ${feesStatus}">${official ? "● Official Amazon fees loaded" : feesStatus === "loading" ? "Checking Amazon fees…" : feeError || "Official fees not loaded"}</div>
         <div class="overview-actions"><button id="rp-overview-open" class="primary">Full analysis</button><button id="rp-overview-refresh">Refresh fees</button></div>
@@ -895,6 +972,14 @@
         previousUrl = location.href;
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(refresh, 350);
+      }
+      const aodContainer = document.querySelector("#aod-container");
+      if (aodContainer && aodContainer !== observedAodContainer) {
+        observedAodContainer = aodContainer;
+        clearTimeout(aodRefreshTimer);
+        aodRefreshTimer = setTimeout(() => loadOffers(true), 600);
+      } else if (!aodContainer) {
+        observedAodContainer = null;
       }
     });
     observer.observe(document.documentElement, {

@@ -163,15 +163,37 @@
     };
   }
 
-  function classifyFulfillment(soldBy, shipsFrom) {
+  function classifyFulfillment(soldBy, shipsFrom, isAmazonFulfilled = false) {
     const seller = String(soldBy || "").trim();
     const shipper = String(shipsFrom || "").trim();
     const isAmazonSeller =
       /(^|\b)amazon(?:\.(?:com|co\.uk|ae|sa))?(?:\b|$)/i.test(seller);
     if (isAmazonSeller) return "Amazon";
+    if (isAmazonFulfilled) return "FBA";
     return /(^|\b)amazon(?:\.(?:com|co\.uk|ae|sa))?(?:\b|$)/i.test(shipper)
       ? "FBA"
       : "FBM";
+  }
+
+  function resolveOfferTotal({
+    ingressTotal,
+    hiddenCount,
+    hiddenLabel,
+    hasPinnedOffer,
+  } = {}) {
+    const candidates = [];
+    const ingress = normalizeNumber(ingressTotal);
+    if (ingress > 0) candidates.push(ingress);
+    const hidden = normalizeNumber(hiddenCount);
+    if (hidden > 0) {
+      const excludesPinned =
+        Boolean(hasPinnedOffer) &&
+        /\bother\s+(?:options?|offers?|sellers?)\b/i.test(
+          String(hiddenLabel || ""),
+        );
+      candidates.push(hidden + (excludesPinned ? 1 : 0));
+    }
+    return candidates.length ? Math.max(...candidates) : null;
   }
 
   function normalizeNumber(value) {
@@ -334,6 +356,7 @@
     parseRankText,
     categoryIntelligence,
     classifyFulfillment,
+    resolveOfferTotal,
     normalizeNumber,
     normalizeDecimal,
     money,
