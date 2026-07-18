@@ -15,8 +15,8 @@
 }
 body {
   margin: 0;
-  width: 410px;
-  min-height: 480px;
+  width: 430px;
+  min-height: 500px;
 }
 header {
   background: #102a20;
@@ -111,11 +111,71 @@ button.primary {
   border-color: #176e42;
 }
 .mini {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 12px;
+  display: grid;
+  gap: 7px;
+  margin-top: 11px;
   font-size: 11px;
   color: #65736b;
+}
+.mini > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 25px;
+  border-bottom: 1px solid #e3eae6;
+}
+.mini b {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #26372e;
+  max-width: 64%;
+  text-align: right;
+}
+.copy {
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+.cost {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+  margin-top: 11px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #dce5df;
+  border-radius: 10px;
+}
+.cost label {
+  display: grid;
+  gap: 5px;
+}
+.cost label span {
+  font-size: 10px;
+  color: #65736b;
+}
+.cost input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #cbd8d0;
+  border-radius: 8px;
+  outline: none;
+}
+.cost input:focus {
+  border-color: #176e42;
+  box-shadow: 0 0 0 3px #176e4218;
+}
+.cost button {
+  align-self: end;
+  padding: 8px 12px;
+}
+.saving {
+  opacity: 0.65;
+  pointer-events: none;
 }
 .loading,
 .empty {

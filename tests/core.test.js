@@ -78,3 +78,28 @@ test("money arithmetic does not inherit binary floating-point errors", () => {
   assert.equal(result.profit, "0.00");
   assert.equal(result.amazonFees, "0.10");
 });
+
+test("extracts parent and subcategory ranks in Amazon display order", () => {
+  const ranks = Core.parseRankText(
+    "Amazon Best Sellers Rank: #2,753 in Health (#1 in Cigar Cutters)",
+  );
+  assert.deepEqual(ranks, [
+    { rank: 2753, category: "Health" },
+    { rank: 1, category: "Cigar Cutters" },
+  ]);
+  assert.deepEqual(Core.categoryIntelligence(["Health", "Cutters"], ranks), {
+    parentCategory: "Health",
+    parentBsr: 2753,
+    subCategory: "Cigar Cutters",
+    subCategoryBsr: 1,
+  });
+});
+
+test("classifies Amazon retail, FBA and FBM fulfillment", () => {
+  assert.equal(Core.classifyFulfillment("Amazon.ae", "Amazon.ae"), "Amazon");
+  assert.equal(Core.classifyFulfillment("Sunny Trading", "Amazon.ae"), "FBA");
+  assert.equal(
+    Core.classifyFulfillment("Sunny Trading", "Sunny Trading"),
+    "FBM",
+  );
+});

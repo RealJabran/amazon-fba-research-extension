@@ -46,6 +46,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: Boolean(market) });
     return false;
   }
+  if (message?.type === "OPEN_OPTIONS") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+    return false;
+  }
 });
 
 async function requestJson(url, options = {}) {

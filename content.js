@@ -26,6 +26,8 @@
   };
   let host;
   let shadow;
+  let overviewHost;
+  let overviewShadow;
   let lastFingerprint = "";
   let refreshTimer;
 
@@ -38,22 +40,20 @@
       .trim();
 
   function parseRanks(bodyText) {
-    const matches = [
-      ...bodyText.matchAll(/#([\d,\.]+)\s+(?:in|en|dans|في)\s+([^\n\r(]+)/gi),
-    ];
     const seen = new Set();
-    return matches
-      .map((match) => ({
-        rank: Number(match[1].replace(/[,\.]/g, "")),
-        category: clean(match[2]),
-      }))
-      .filter(
-        (rank) =>
-          rank.rank > 0 &&
-          rank.category &&
-          !seen.has(`${rank.rank}:${rank.category}`) &&
-          seen.add(`${rank.rank}:${rank.category}`),
-      );
+    const detailNodes = [
+      ...document.querySelectorAll(
+        "#detailBullets_feature_div li, #detailBulletsWrapper_feature_div li, #productDetails_detailBullets_sections1 tr, #productDetails_db_sections tr, #prodDetails tr",
+      ),
+    ];
+    const sources = detailNodes
+      .map((node) => clean(node.textContent))
+      .filter((value) => value.includes("#"));
+    if (!sources.length) sources.push(bodyText);
+    return sources.flatMap(Core.parseRankText).filter((item) => {
+      const key = `${item.rank}:${item.category.toLowerCase()}`;
+      return !seen.has(key) && seen.add(key);
+    });
   }
 
   function detailText() {
@@ -103,12 +103,17 @@
       .map((node) => clean(node.textContent))
       .filter(Boolean);
     const ranks = parseRanks(detailText());
+    const category = Core.categoryIntelligence(breadcrumbs, ranks);
     return {
       asin,
       title: firstText(["#productTitle", "#title", "h1.a-size-large"]),
       price: Core.normalizeDecimal(priceText),
       priceText,
-      category: breadcrumbs.at(-1) || ranks[0]?.category || "",
+      category: category.parentCategory,
+      parentCategory: category.parentCategory,
+      parentBsr: category.parentBsr,
+      subCategory: category.subCategory,
+      subCategoryBsr: category.subCategoryBsr,
       breadcrumbs,
       ranks,
       packageDimensions: labeledDetail(
@@ -173,31 +178,111 @@
   }
 
   function classifyOffer(node) {
-    const shipsFrom = clean(
-      node.querySelector("#aod-offer-shipsFrom, [id*='shipsFrom']")
-        ?.textContent,
-    );
+    const fieldText = (selector) => {
+      const field = node.querySelector(selector);
+      return clean(
+        field?.querySelector(
+          ".a-fixed-left-grid-col.a-col-right, .a-col-right, span.a-size-small:last-child",
+        )?.textContent || field?.textContent,
+      );
+    };
+    const shipsFrom = fieldText(
+      "#aod-offer-shipsFrom, [id*='shipsFrom'], [id*='ships-from']",
+    )
+      .replace(/^(Ships from|Dispatches from|الشحن من)\s*:?\s*/i, "")
+      .trim();
     const soldByNode = node.querySelector(
-      "#aod-offer-soldBy a, [id*='soldBy'] a",
+      "#aod-offer-soldBy a, [id*='soldBy'] a, [id*='sold-by'] a, a[href*='seller=']",
     );
     const soldBy = clean(
       soldByNode?.textContent ||
-        node.querySelector("#aod-offer-soldBy, [id*='soldBy']")?.textContent,
+        fieldText("#aod-offer-soldBy, [id*='soldBy'], [id*='sold-by']"),
     )
-      .replace(/^Sold by:?/i, "")
+      .replace(/^(Sold by|Seller|البائع)\s*:?\s*/i, "")
       .trim();
-    const sellerId =
-      new URL(soldByNode?.href || location.href).searchParams.get("seller") ||
-      soldBy;
-    const amazonNames = /amazon(?:\.com|\.co\.uk|\.ae|\.sa)?\b/i;
-    const isAmazon = amazonNames.test(soldBy);
-    const isFba = /amazon/i.test(shipsFrom);
+    let sellerId = soldBy;
+    try {
+      const sellerUrl = new URL(soldByNode?.href || location.href);
+      sellerId =
+        sellerUrl.searchParams.get("seller") ||
+        sellerUrl.searchParams.get("me") ||
+        soldBy;
+    } catch (_) {
+      sellerId = soldBy;
+    }
     return {
       name: soldBy || "Unknown seller",
       sellerId,
-      fulfillment: isAmazon ? "Amazon" : isFba ? "FBA" : "FBM",
+      fulfillment: Core.classifyFulfillment(soldBy, shipsFrom),
       shipsFrom,
     };
+  }
+
+  function featuredOffer() {
+    const sellerNode = document.querySelector(
+      "#sellerProfileTriggerId, #merchant-info a[href*='seller='], #merchant-info a[href*='me=']",
+    );
+    const merchant = clean(text("#merchant-info"));
+    let soldBy = clean(sellerNode?.textContent);
+    if (!soldBy) {
+      soldBy = clean(
+        merchant.match(/(?:Sold by|Seller|البائع)\s*:?\s*([^,.]+)/i)?.[1],
+      );
+    }
+    if (!soldBy && /Ships from and sold by Amazon/i.test(merchant))
+      soldBy = "Amazon";
+    if (!soldBy) return null;
+    const shipsFrom = firstText([
+      "#fulfillerInfoFeature_feature_div .offer-display-feature-text",
+      "#shipsFromSoldBy_feature_div .offer-display-feature-text",
+      "#merchant-info",
+    ]);
+    let sellerId = soldBy;
+    try {
+      const sellerUrl = new URL(sellerNode?.href || location.href);
+      sellerId =
+        sellerUrl.searchParams.get("seller") ||
+        sellerUrl.searchParams.get("me") ||
+        soldBy;
+    } catch (_) {
+      sellerId = soldBy;
+    }
+    return {
+      name: soldBy,
+      sellerId,
+      fulfillment: Core.classifyFulfillment(soldBy, shipsFrom),
+      shipsFrom: clean(shipsFrom),
+    };
+  }
+
+  async function fetchOfferDocument(page = 1) {
+    const query = `asin=${encodeURIComponent(product.asin)}&pc=dp&experienceId=aodAjaxMain${page > 1 ? `&pageno=${page}` : ""}`;
+    const paths = [
+      `/gp/aod/ajax?${query}`,
+      `/gp/aod/ajax/ref=auto_load_aod?${query}`,
+    ];
+    for (const url of paths) {
+      const response = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "text/html, */*; q=0.01",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      if (!response.ok) continue;
+      const html = await response.text();
+      if (!html || /validateCaptcha|enter the characters you see/i.test(html))
+        continue;
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      if (
+        doc.querySelector(
+          "#aod-offer, .aod-offer, #aod-pinned-offer, #aod-container",
+        )
+      )
+        return doc;
+    }
+    return null;
   }
 
   async function loadOffers(force = false) {
@@ -205,30 +290,39 @@
     offers = { ...offers, status: "loading" };
     render();
     try {
-      const url = `/gp/aod/ajax/ref=auto_load_aod?asin=${encodeURIComponent(product.asin)}&pc=dp&experienceId=aodAjaxMain`;
-      const response = await fetch(url, {
-        credentials: "include",
-        cache: "no-store",
-        headers: { Accept: "text/html" },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const doc = new DOMParser().parseFromString(
-        await response.text(),
-        "text/html",
-      );
-      const nodes = [...doc.querySelectorAll("#aod-offer, .aod-offer")];
       const unique = new Map();
-      nodes
-        .map(classifyOffer)
-        .forEach((seller) =>
+      const featured = featuredOffer();
+      if (featured) unique.set(featured.sellerId || featured.name, featured);
+      let loadedDocument = false;
+      for (let page = 1; page <= 5; page += 1) {
+        const doc = await fetchOfferDocument(page);
+        if (!doc) break;
+        loadedDocument = true;
+        const before = unique.size;
+        const nodes = [
+          ...doc.querySelectorAll("#aod-offer, .aod-offer, #aod-pinned-offer"),
+        ];
+        nodes.map(classifyOffer).forEach((seller) => {
+          if (seller.name === "Unknown seller" && !seller.shipsFrom) return;
           unique.set(
             seller.sellerId || `${seller.name}:${seller.fulfillment}`,
             seller,
+          );
+        });
+        const hasNext = Boolean(
+          doc.querySelector(
+            "#aod-pagn-next-link, .a-pagination .a-last:not(.a-disabled)",
           ),
         );
+        if (!hasNext || unique.size === before) break;
+      }
       const sellers = [...unique.values()];
       offers = {
-        status: sellers.length ? "observed" : "unavailable",
+        status: sellers.length
+          ? "observed"
+          : loadedDocument
+            ? "unavailable"
+            : "error",
         sellers,
         total: sellers.length,
         fba: sellers.filter((seller) => seller.fulfillment === "FBA").length,
@@ -236,6 +330,10 @@
         amazon: sellers.filter((seller) => seller.fulfillment === "Amazon")
           .length,
         observedAt: new Date().toISOString(),
+        error:
+          !sellers.length && !loadedDocument
+            ? "Amazon did not return the offer list to this browser session"
+            : "",
       };
       if (!sellers.length)
         Object.assign(offers, {
@@ -290,31 +388,28 @@
     return `<div class="rp-metric ${className}"><span>${label}</span><strong>${value}</strong></div>`;
   }
 
+  function listingInfo() {
+    const fallbackRanks =
+      product?.ranks?.length || !product?.official?.salesRank
+        ? product?.ranks || []
+        : [
+            {
+              rank: product.official.salesRank,
+              category: product.official.salesRankCategory || "",
+            },
+          ];
+    return Core.categoryIntelligence(product?.breadcrumbs || [], fallbackRanks);
+  }
+
   function render() {
     if (!shadow || !product?.asin) return;
     const calc = calculation();
     const profitClass =
       calc.profitSign > 0 ? "positive" : calc.profitSign < 0 ? "negative" : "";
-    const rank =
-      product.ranks[0] ||
-      (product.official?.salesRank
-        ? {
-            rank: product.official.salesRank,
-            category: product.official.salesRankCategory,
-          }
-        : null);
+    const listing = listingInfo();
     const visible = settings.visible;
+    renderOverview();
     shadow.innerHTML = `<style>${styles()}</style>
-      ${
-        settings.showFloatingWidget
-          ? `<button id="rp-float" aria-label="Open RizPoint FBA analysis">
-        <span class="rp-market">${marketplace.flag} ${marketplace.id}</span>
-        <b>${Core.money(inputs.salePrice, marketplace)}</b>
-        <span class="${profitClass}">${fees ? `${Core.money(calc.profit, marketplace)} profit` : "Check fees"}</span>
-        <small>${rank ? `BSR #${Number(rank.rank).toLocaleString()}` : "BSR unavailable"} · ${offers.status === "observed" ? `${offers.fba} FBA / ${offers.fbm} FBM` : "offers…"}</small>
-      </button>`
-          : ""
-      }
       <div id="rp-overlay" class="rp-hidden" role="dialog" aria-modal="true" aria-label="RizPoint FBA Research">
         <div class="rp-backdrop" data-close></div>
         <section class="rp-panel">
@@ -322,7 +417,7 @@
           <div class="rp-content">
             <div class="rp-product">
               ${product.image ? `<img src="${escapeHtml(product.image)}" alt="">` : ""}
-              <div><h3>${escapeHtml(product.title || "Amazon product")}</h3><div class="rp-tags"><span>ASIN ${escapeHtml(product.asin)}</span>${copyButton(product.asin)}<span>${escapeHtml(product.category || product.productGroup || "Category unavailable")}</span>${copyButton(product.category || product.productGroup || "")}</div></div>
+              <div><h3>${escapeHtml(product.title || "Amazon product")}</h3><div class="rp-tags"><span>ASIN ${escapeHtml(product.asin)}</span>${copyButton(product.asin)}<span>${escapeHtml(listing.parentCategory || product.productGroup || "Parent category unavailable")}</span>${copyButton(listing.parentCategory || product.productGroup || "")}</div></div>
             </div>
             <div class="rp-grid top">
               ${visible.buyBox ? metric("Selling price", Core.money(inputs.salePrice, marketplace)) : ""}
@@ -378,8 +473,8 @@
                 <div class="rp-card-title"><h4>Listing intelligence</h4><button id="rp-copy-row" class="link">Copy row for sheet</button></div>
                 <div class="rp-lines">
                   ${visible.asin ? detailLine("ASIN", product.asin, true) : ""}
-                  ${visible.category ? detailLine("Category", product.category || product.productGroup, true) : ""}
-                  ${visible.bsr ? detailLine("Best Sellers Rank", rank ? `#${Number(rank.rank).toLocaleString()} in ${rank.category || "Unknown"}` : "Unavailable", true) : ""}
+                  ${visible.category ? detailLine("Parent category", listing.parentCategory || product.productGroup, true) + detailLine("Subcategory", listing.subCategory, true) : ""}
+                  ${visible.bsr ? detailLine("Parent category BSR", listing.parentBsr ? `#${Number(listing.parentBsr).toLocaleString()}` : "Unavailable", true) + detailLine("Subcategory BSR", listing.subCategoryBsr ? `#${Number(listing.subCategoryBsr).toLocaleString()}` : "Unavailable", true) : ""}
                   ${visible.dimensions ? detailLine("Package dimensions", product.packageDimensions || "Unavailable") + detailLine("Weight", product.weight || "Unavailable") : ""}
                 </div>
                 ${product.ranks.length > 1 ? `<div class="rp-ranks">${product.ranks.map((item) => `<span>#${Number(item.rank).toLocaleString()} ${escapeHtml(item.category)}</span>`).join("")}</div>` : ""}
@@ -390,6 +485,98 @@
         </section>
       </div>`;
     wireEvents();
+  }
+
+  function buyBoxAnchor() {
+    const direct = document.querySelector(
+      "#desktop_qualifiedBuyBox, #buybox_feature_div, #desktop_buybox, #buybox",
+    );
+    if (direct)
+      return (
+        direct.closest("#desktop_qualifiedBuyBox, #buybox_feature_div") ||
+        direct
+      );
+    return document.querySelector("#rightCol, #right-col");
+  }
+
+  function ensureOverviewHost() {
+    if (!settings.showFloatingWidget) {
+      overviewHost?.remove();
+      overviewHost = null;
+      overviewShadow = null;
+      return false;
+    }
+    const anchor = buyBoxAnchor();
+    if (!anchor) return false;
+    if (!overviewHost) {
+      overviewHost = document.createElement("div");
+      overviewHost.id = "rizpoint-buybox-overview-root";
+      overviewShadow = overviewHost.attachShadow({ mode: "open" });
+    }
+    if (!overviewHost.isConnected) {
+      if (anchor.matches("#rightCol, #right-col"))
+        anchor.insertBefore(overviewHost, anchor.firstChild);
+      else anchor.parentNode?.insertBefore(overviewHost, anchor);
+    }
+    return overviewHost.isConnected;
+  }
+
+  function renderOverview() {
+    if (!product?.asin || !ensureOverviewHost() || !overviewShadow) return;
+    const calc = calculation();
+    const listing = listingInfo();
+    const official = feesStatus === "official";
+    const profitClass =
+      calc.profitSign > 0 ? "positive" : calc.profitSign < 0 ? "negative" : "";
+    overviewShadow.innerHTML = `<style>${overviewStyles()}</style>
+      <aside class="overview" aria-label="RizPoint product research overview">
+        <div class="overview-head"><div><span>RIZPOINT</span><b>FBA overview</b></div><span class="market-pill">${marketplace.flag} ${marketplace.id}</span></div>
+        <div class="price-row"><div><small>Current price</small><strong>${Core.money(inputs.salePrice, marketplace)}</strong></div><label><small>Product cost (${marketplace.currency})</small><div><input id="rp-overview-cost" inputmode="decimal" value="${escapeHtml(inputs.productCost)}" placeholder="0.00"><button id="rp-apply-cost">Update</button></div></label></div>
+        <div class="overview-metrics">
+          <div><small>Net profit</small><b class="${profitClass}">${official ? Core.money(calc.profit, marketplace) : "—"}</b></div>
+          <div><small>ROI</small><b class="${profitClass}">${official && calc.roi !== null ? `${calc.roi}%` : "—"}</b></div>
+          <div><small>Margin</small><b class="${profitClass}">${official && calc.margin !== null ? `${calc.margin}%` : "—"}</b></div>
+          <div><small>Amazon fees</small><b>${official ? Core.money(calc.amazonFees, marketplace) : "—"}</b></div>
+        </div>
+        <div class="overview-lines">
+          ${overviewLine("ASIN", product.asin, true)}
+          ${overviewLine("Parent category", listing.parentCategory || "Unavailable", Boolean(listing.parentCategory))}
+          ${overviewLine("Parent BSR", listing.parentBsr ? `#${Number(listing.parentBsr).toLocaleString()}` : "Unavailable", Boolean(listing.parentBsr))}
+        </div>
+        <div class="overview-status ${feesStatus}">${official ? "● Official Amazon fees loaded" : feesStatus === "loading" ? "Checking Amazon fees…" : feeError || "Official fees not loaded"}</div>
+        <div class="overview-actions"><button id="rp-overview-open" class="primary">Full analysis</button><button id="rp-overview-refresh">Refresh fees</button></div>
+      </aside>`;
+    bindCopyButtons(overviewShadow);
+    const updateCost = async () => {
+      inputs.productCost =
+        overviewShadow.getElementById("rp-overview-cost").value;
+      await persistProductCost();
+      render();
+    };
+    overviewShadow
+      .getElementById("rp-apply-cost")
+      ?.addEventListener("click", updateCost);
+    overviewShadow
+      .getElementById("rp-overview-cost")
+      ?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") updateCost();
+      });
+    overviewShadow
+      .getElementById("rp-overview-open")
+      ?.addEventListener("click", openPanel);
+    overviewShadow
+      .getElementById("rp-overview-refresh")
+      ?.addEventListener("click", () => loadFees(true));
+  }
+
+  function overviewLine(label, value, copy = false) {
+    return `<div><span>${label}</span><b>${escapeHtml(value)}${copy ? copyButton(value, `Copy ${label}`) : ""}</b></div>`;
+  }
+
+  function overviewStyles() {
+    return `
+      :host{all:initial;display:block;margin:0 0 14px;font-family:Inter,Arial,sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}.overview{border:1px solid #cfe0d6;border-radius:14px;background:#fff;box-shadow:0 8px 24px #153c2814;overflow:hidden}.overview-head{display:flex;align-items:center;justify-content:space-between;background:#102a20;color:#fff;padding:12px 13px}.overview-head>div{display:grid;gap:1px}.overview-head>div span{font-size:9px;letter-spacing:.14em;color:#91dfad;font-weight:800}.overview-head b{font-size:14px}.market-pill{font-size:10px;background:#1d4a36;padding:5px 7px;border-radius:999px}.price-row{display:grid;grid-template-columns:.8fr 1.2fr;gap:9px;padding:12px 12px 9px}.price-row>div,.price-row label{display:grid;gap:5px}.price-row small,.overview-metrics small{font-size:9px;color:#68776f}.price-row strong{font-size:19px}.price-row label>div{display:flex}.price-row input{width:100%;min-width:0;border:1px solid #cad8d0;border-radius:7px 0 0 7px;padding:7px 8px;outline:none}.price-row input:focus{border-color:#1b7a48}.price-row button{border:0;border-radius:0 7px 7px 0;background:#176e42;color:#fff;font-size:10px;font-weight:800;padding:0 8px;cursor:pointer}.overview-metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#e4ebe7;border-block:1px solid #e4ebe7}.overview-metrics>div{display:grid;gap:3px;background:#f8faf9;padding:9px 12px}.overview-metrics b{font-size:14px}.positive{color:#148447}.negative{color:#c83f49}.overview-lines{padding:9px 12px;display:grid;gap:7px}.overview-lines>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px}.overview-lines span{color:#68776f}.overview-lines b{display:flex;align-items:center;gap:5px;max-width:62%;text-align:right}.rp-copy{border:0;background:#e2eee7;color:#176e42;border-radius:5px;padding:2px 5px;cursor:pointer}.overview-status{margin:0 12px 9px;border-radius:7px;background:#eef3f0;color:#637168;padding:7px 8px;font-size:9px}.overview-status.official{background:#e2f6e9;color:#147642}.overview-status.error{background:#fde9ea;color:#ad333b}.overview-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.overview-actions button{border:1px solid #cad8d0;border-radius:8px;background:#fff;color:#176e42;padding:8px 6px;font-size:10px;font-weight:800;cursor:pointer}.overview-actions .primary{background:#176e42;color:#fff;border-color:#176e42}
+    `;
   }
 
   function inputHtml(name, label, value) {
@@ -404,13 +591,15 @@
 
   function sheetRow() {
     const calc = calculation();
-    const rank = product.ranks[0];
+    const listing = listingInfo();
     return [
       product.asin,
       product.title,
       marketplace.id,
-      product.category || product.productGroup || "",
-      rank?.rank || "",
+      listing.parentCategory || product.productGroup || "",
+      listing.parentBsr || "",
+      listing.subCategory || "",
+      listing.subCategoryBsr || "",
       inputs.salePrice,
       inputs.productCost,
       fees?.referralFee ?? "",
@@ -426,12 +615,26 @@
     ].join("\t");
   }
 
-  function wireEvents() {
-    shadow.getElementById("rp-float")?.addEventListener("click", openPanel);
-    shadow
-      .querySelectorAll("[data-close]")
-      .forEach((node) => node.addEventListener("click", closePanel));
-    shadow.querySelectorAll("[data-copy]").forEach((node) =>
+  function productCostStorageKey() {
+    return `productCost:${marketplace.id}:${product?.asin || ""}`;
+  }
+
+  async function persistProductCost() {
+    if (!product?.asin) return;
+    await chrome.storage.local.set({
+      [productCostStorageKey()]: inputs.productCost,
+    });
+  }
+
+  async function loadProductCost() {
+    if (!product?.asin) return settings.defaultProductCost;
+    const key = productCostStorageKey();
+    const stored = await chrome.storage.local.get(key);
+    return stored[key] ?? settings.defaultProductCost;
+  }
+
+  function bindCopyButtons(root) {
+    root.querySelectorAll("[data-copy]").forEach((node) =>
       node.addEventListener("click", async () => {
         await navigator.clipboard.writeText(node.dataset.copy);
         const old = node.textContent;
@@ -441,11 +644,19 @@
         }, 900);
       }),
     );
+  }
+
+  function wireEvents() {
+    shadow
+      .querySelectorAll("[data-close]")
+      .forEach((node) => node.addEventListener("click", closePanel));
+    bindCopyButtons(shadow);
     shadow.querySelectorAll("[data-input]").forEach((node) =>
-      node.addEventListener("change", () => {
+      node.addEventListener("change", async () => {
         inputs[node.dataset.input] = node.value;
         if (node.dataset.input === "salePrice") loadFees(true);
         else {
+          if (node.dataset.input === "productCost") await persistProductCost();
           render();
           openPanel();
         }
@@ -465,7 +676,9 @@
     );
     shadow
       .getElementById("rp-settings")
-      ?.addEventListener("click", () => chrome.runtime.openOptionsPage());
+      ?.addEventListener("click", () =>
+        chrome.runtime.sendMessage({ type: "OPEN_OPTIONS" }),
+      );
     shadow
       .getElementById("rp-copy-row")
       ?.addEventListener("click", async (event) => {
@@ -484,9 +697,9 @@
   function styles() {
     return `
     :host{all:initial;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}button{cursor:pointer}
-    #rp-float{position:fixed;right:0;top:38%;z-index:2147483645;width:178px;padding:12px 14px;border:0;border-radius:14px 0 0 14px;background:#102a20;color:#fff;box-shadow:0 12px 34px #102a2040;text-align:left;display:grid;gap:4px}#rp-float b{font-size:17px}#rp-float small{color:#b8cdc3;line-height:1.35}.rp-market{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#9de2b7}.positive{color:#148447!important}.negative{color:#c83f49!important}#rp-float .positive{color:#74e5a0!important}#rp-float .negative{color:#ff9fa7!important}
-    .rp-hidden{display:none!important}#rp-overlay{position:fixed;inset:0;z-index:2147483646}.rp-backdrop{position:absolute;inset:0;background:#07120db8;backdrop-filter:blur(4px)}.rp-panel{position:absolute;inset:3vh 3vw;background:#f5f8f6;border-radius:20px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 28px 90px #0008}.rp-panel header,.rp-panel footer{display:flex;align-items:center;justify-content:space-between;background:#fff;padding:16px 22px;border-bottom:1px solid #dce5df}.rp-panel footer{border:0;border-top:1px solid #dce5df;font-size:12px;color:#617068}.rp-panel footer button{border:0;background:none;color:#176e42;font-weight:700}.rp-brand{font-size:10px;letter-spacing:.15em;color:#197547;font-weight:800}.rp-panel h2{font-size:20px;margin:0}.rp-header-actions{display:flex;align-items:center;gap:12px}.rp-header-actions>button{border:0;background:#edf3ef;border-radius:50%;width:34px;height:34px;font-size:24px}.rp-market-pill{background:#e7f6ec;color:#126239;padding:8px 11px;border-radius:999px;font-size:12px;font-weight:700}.rp-content{padding:20px 22px;overflow:auto}.rp-product{display:flex;align-items:center;gap:14px;margin-bottom:16px}.rp-product img{width:56px;height:56px;object-fit:contain;background:#fff;border-radius:10px}.rp-product h3{font-size:15px;margin:0 0 7px;max-width:900px}.rp-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.rp-tags span,.rp-ranks span{font-size:11px;background:#e8eeea;padding:5px 8px;border-radius:7px;color:#526259}.rp-copy{border:0;background:#dce8e0;color:#176e42;border-radius:6px;padding:3px 7px}.rp-grid{display:grid;gap:10px}.rp-grid.top{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:14px}.rp-metric{background:#fff;border:1px solid #dce5df;border-radius:12px;padding:12px;display:grid;gap:4px}.rp-metric span{font-size:11px;color:#697970}.rp-metric strong{font-size:18px}.rp-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.rp-card{background:#fff;border:1px solid #dce5df;border-radius:14px;padding:15px;min-width:0}.rp-card-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.rp-card h4{font-size:14px;margin:0}.rp-card-title>span{font-size:10px;color:#6d7b73}.rp-status{font-size:11px;color:#6d7b73}.rp-status.good{color:#147642}.rp-status.bad{color:#b82f3a}.rp-status.pending{color:#9d650d}.rp-card-title small{display:block}.rp-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.rp-form-grid label{display:grid;gap:5px}.rp-form-grid label span{font-size:11px;color:#5e6d65}.rp-form-grid input{width:100%;border:1px solid #cbd8d0;border-radius:9px;padding:9px 10px;color:#17231d;background:#fbfdfc;outline:none}.rp-form-grid input:focus{border-color:#258b55;box-shadow:0 0 0 3px #258b5520}.rp-actions{display:flex;gap:8px;margin-top:12px}.rp-actions button{border:1px solid #cbd8d0;background:#fff;border-radius:9px;padding:9px 11px;font-size:11px;font-weight:700}.rp-actions .primary{background:#176e42;border-color:#176e42;color:#fff}.rp-lines{display:grid;gap:8px}.rp-lines>div{display:flex;justify-content:space-between;align-items:start;gap:12px;font-size:12px}.rp-lines>div span{color:#68776f}.rp-lines .total{border-top:1px solid #e2e9e4;padding-top:9px;margin-top:2px}.rp-lines .total b{font-size:15px}.rp-empty{padding:20px;background:#f3f6f4;color:#6a7870;border-radius:10px;font-size:12px;line-height:1.5}.offers{grid-template-columns:repeat(4,1fr)}.offers .rp-metric{background:#f6f9f7;padding:9px}.offers .rp-metric strong{font-size:16px}.rp-note{font-size:10px;color:#78857e;line-height:1.45;margin:10px 0}.rp-sellers{max-height:120px;overflow:auto;display:grid;gap:5px}.rp-sellers>div{display:flex;justify-content:space-between;font-size:11px;border-top:1px solid #edf1ee;padding-top:5px}.rp-sellers b{font-size:9px;padding:3px 6px;border-radius:5px;background:#e8eeea}.rp-sellers .fba{background:#e1f6e8;color:#13733f}.rp-sellers .fbm{background:#fff1dc;color:#955d09}.rp-sellers .amazon{background:#e5effd;color:#1b5aa2}.link{border:0;background:none;color:#176e42;font-size:11px;font-weight:700}.rp-ranks{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}
-    @media(max-width:850px){.rp-panel{inset:1vh 1vw}.rp-columns{grid-template-columns:1fr}.rp-grid.top{grid-template-columns:repeat(2,1fr)}}
+    .positive{color:#148447!important}.negative{color:#c83f49!important}
+    .rp-hidden{display:none!important}#rp-overlay{position:fixed;inset:0;z-index:2147483646}.rp-backdrop{position:absolute;inset:0;background:#07120db8;backdrop-filter:blur(4px)}.rp-panel{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1120px,calc(100vw - 40px));height:min(760px,calc(100vh - 40px));background:#f5f8f6;border-radius:18px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 28px 90px #0008}.rp-panel header,.rp-panel footer{display:flex;align-items:center;justify-content:space-between;background:#fff;padding:14px 20px;border-bottom:1px solid #dce5df}.rp-panel footer{border:0;border-top:1px solid #dce5df;font-size:11px;color:#617068}.rp-panel footer button{border:0;background:none;color:#176e42;font-weight:700}.rp-brand{font-size:9px;letter-spacing:.15em;color:#197547;font-weight:800}.rp-panel h2{font-size:18px;margin:0}.rp-header-actions{display:flex;align-items:center;gap:10px}.rp-header-actions>button{border:0;background:#edf3ef;border-radius:50%;width:32px;height:32px;font-size:22px}.rp-market-pill{background:#e7f6ec;color:#126239;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:700}.rp-content{padding:16px 18px;overflow:auto}.rp-product{display:flex;align-items:center;gap:12px;margin-bottom:13px}.rp-product img{width:48px;height:48px;object-fit:contain;background:#fff;border-radius:9px}.rp-product h3{font-size:14px;margin:0 0 6px;max-width:850px}.rp-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.rp-tags span,.rp-ranks span{font-size:10px;background:#e8eeea;padding:4px 7px;border-radius:6px;color:#526259}.rp-copy{border:0;background:#dce8e0;color:#176e42;border-radius:6px;padding:3px 7px}.rp-grid{display:grid;gap:9px}.rp-grid.top{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:12px}.rp-metric{background:#fff;border:1px solid #dce5df;border-radius:11px;padding:10px;display:grid;gap:3px}.rp-metric span{font-size:10px;color:#697970}.rp-metric strong{font-size:17px}.rp-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.rp-card{background:#fff;border:1px solid #dce5df;border-radius:12px;padding:13px;min-width:0}.rp-card-title{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:10px}.rp-card h4{font-size:13px;margin:0}.rp-card-title>span{font-size:9px;color:#6d7b73}.rp-status{font-size:10px;color:#6d7b73}.rp-status.good{color:#147642}.rp-status.bad{color:#b82f3a}.rp-status.pending{color:#9d650d}.rp-card-title small{display:block}.rp-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.rp-form-grid label{display:grid;gap:4px}.rp-form-grid label span{font-size:10px;color:#5e6d65}.rp-form-grid input{width:100%;border:1px solid #cbd8d0;border-radius:8px;padding:8px 9px;color:#17231d;background:#fbfdfc;outline:none}.rp-form-grid input:focus{border-color:#258b55;box-shadow:0 0 0 3px #258b5520}.rp-actions{display:flex;gap:7px;margin-top:10px}.rp-actions button{border:1px solid #cbd8d0;background:#fff;border-radius:8px;padding:8px 10px;font-size:10px;font-weight:700}.rp-actions .primary{background:#176e42;border-color:#176e42;color:#fff}.rp-lines{display:grid;gap:7px}.rp-lines>div{display:flex;justify-content:space-between;align-items:start;gap:10px;font-size:11px}.rp-lines>div span{color:#68776f}.rp-lines .total{border-top:1px solid #e2e9e4;padding-top:8px;margin-top:2px}.rp-lines .total b{font-size:14px}.rp-empty{padding:17px;background:#f3f6f4;color:#6a7870;border-radius:9px;font-size:11px;line-height:1.5}.offers{grid-template-columns:repeat(4,1fr)}.offers .rp-metric{background:#f6f9f7;padding:8px}.offers .rp-metric strong{font-size:15px}.rp-note{font-size:9px;color:#78857e;line-height:1.45;margin:8px 0}.rp-sellers{max-height:110px;overflow:auto;display:grid;gap:4px}.rp-sellers>div{display:flex;justify-content:space-between;font-size:10px;border-top:1px solid #edf1ee;padding-top:4px}.rp-sellers b{font-size:8px;padding:3px 5px;border-radius:5px;background:#e8eeea}.rp-sellers .fba{background:#e1f6e8;color:#13733f}.rp-sellers .fbm{background:#fff1dc;color:#955d09}.rp-sellers .amazon{background:#e5effd;color:#1b5aa2}.link{border:0;background:none;color:#176e42;font-size:10px;font-weight:700}.rp-ranks{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+    @media(max-width:850px){.rp-panel{width:calc(100vw - 16px);height:calc(100vh - 16px)}.rp-columns{grid-template-columns:1fr}.rp-grid.top{grid-template-columns:repeat(2,1fr)}}
   `;
   }
 
@@ -512,7 +725,7 @@
       lastFingerprint = "";
       inputs = {
         salePrice: product.price ?? "",
-        productCost: settings.defaultProductCost,
+        productCost: await loadProductCost(),
         prepFee: settings.defaultPrepFee,
         inboundShipping: settings.defaultInboundShipping,
         otherCost: settings.defaultOtherCost,
@@ -530,20 +743,45 @@
     if (changedProduct && settings.autoLoadOffers) loadOffers();
   }
 
+  function pageData() {
+    return {
+      ok: Boolean(product?.asin),
+      marketplace,
+      product,
+      fees,
+      feesStatus,
+      feeError,
+      offers,
+      inputs,
+      calculation: calculation(),
+    };
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "GET_PAGE_DATA") {
-      sendResponse({
-        ok: Boolean(product?.asin),
-        marketplace,
-        product,
-        fees,
-        feesStatus,
-        feeError,
-        offers,
-        inputs,
-        calculation: calculation(),
-      });
+      sendResponse(pageData());
       return false;
+    }
+    if (message?.type === "UPDATE_INPUTS") {
+      const allowed = [
+        "salePrice",
+        "productCost",
+        "prepFee",
+        "inboundShipping",
+        "otherCost",
+      ];
+      Object.entries(message.inputs || {}).forEach(([key, value]) => {
+        if (allowed.includes(key)) inputs[key] = String(value ?? "");
+      });
+      (async () => {
+        if (Object.hasOwn(message.inputs || {}, "productCost"))
+          await persistProductCost();
+        render();
+        if (Object.hasOwn(message.inputs || {}, "salePrice"))
+          await loadFees(true);
+        sendResponse(pageData());
+      })();
+      return true;
     }
     if (message?.type === "OPEN_PANEL") {
       openPanel();

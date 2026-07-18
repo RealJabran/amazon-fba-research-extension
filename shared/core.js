@@ -102,6 +102,78 @@
     return exact ? exact[0].toUpperCase() : null;
   }
 
+  function parseRankText(value) {
+    const source = String(value || "")
+      .replace(/[\u200e\u200f\u202a-\u202e]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const matches = [
+      ...source.matchAll(
+        /#\s*([\d,.]+)\s+(?:in|en|dans|في)\s+(.+?)(?=(?:#\s*[\d,.]+\s+(?:in|en|dans|في)\s+)|\(|$)/giu,
+      ),
+    ];
+    const seen = new Set();
+    return matches
+      .map((match) => ({
+        rank: Number(match[1].replace(/[,\.]/g, "")),
+        category: match[2]
+          .replace(/^Amazon Best Sellers Rank\s*:?\s*/i, "")
+          .replace(/\s+See Top \d+.*$/i, "")
+          .replace(/[)|·:;,\-]+$/g, "")
+          .trim(),
+      }))
+      .filter((item) => {
+        const key = `${item.rank}:${item.category.toLowerCase()}`;
+        return (
+          item.rank > 0 && item.category && !seen.has(key) && seen.add(key)
+        );
+      });
+  }
+
+  function categoryIntelligence(breadcrumbs = [], ranks = []) {
+    const cleanBreadcrumbs = breadcrumbs
+      .map((item) =>
+        String(item || "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .filter(Boolean);
+    const cleanRanks = ranks.filter(
+      (item) => Number(item?.rank) > 0 && String(item?.category || "").trim(),
+    );
+    const parent = cleanRanks[0] || null;
+    const subcategory =
+      cleanRanks.find(
+        (item, index) =>
+          index > 0 &&
+          item.category.toLowerCase() !== parent?.category?.toLowerCase(),
+      ) || null;
+    const parentCategory = parent?.category || cleanBreadcrumbs[0] || "";
+    const subCategory =
+      subcategory?.category ||
+      [...cleanBreadcrumbs]
+        .reverse()
+        .find((item) => item.toLowerCase() !== parentCategory.toLowerCase()) ||
+      "";
+    return {
+      parentCategory,
+      parentBsr: parent?.rank || null,
+      subCategory,
+      subCategoryBsr: subcategory?.rank || null,
+    };
+  }
+
+  function classifyFulfillment(soldBy, shipsFrom) {
+    const seller = String(soldBy || "").trim();
+    const shipper = String(shipsFrom || "").trim();
+    const isAmazonSeller =
+      /(^|\b)amazon(?:\.(?:com|co\.uk|ae|sa))?(?:\b|$)/i.test(seller);
+    if (isAmazonSeller) return "Amazon";
+    return /(^|\b)amazon(?:\.(?:com|co\.uk|ae|sa))?(?:\b|$)/i.test(shipper)
+      ? "FBA"
+      : "FBM";
+  }
+
   function normalizeNumber(value) {
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
     let text = String(value ?? "")
@@ -259,6 +331,9 @@
     DEFAULT_SETTINGS,
     marketplaceFromHost,
     parseAsin,
+    parseRankText,
+    categoryIntelligence,
+    classifyFulfillment,
     normalizeNumber,
     normalizeDecimal,
     money,

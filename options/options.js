@@ -1,8 +1,8 @@
 (async function () {
   const labels = {
     asin: "ASIN",
-    category: "Category",
-    bsr: "Best Sellers Rank",
+    category: "Parent category and subcategory",
+    bsr: "Parent and subcategory BSR",
     buyBox: "Buy Box price",
     offers: "FBA / FBM offers",
     dimensions: "Dimensions and weight",
