@@ -61,6 +61,8 @@
       "#detailBullets_feature_div",
       "#productDetails_detailBullets_sections1",
       "#productDetails_techSpec_section_1",
+      "#productOverview_feature_div",
+      "#poExpander",
       "#prodDetails",
     ]
       .map((selector) => text(selector))
@@ -69,6 +71,24 @@
   }
 
   function labeledDetail(labelPattern) {
+    const labelRegex = new RegExp(labelPattern, "i");
+    const candidates = [
+      ...document.querySelectorAll(
+        "#detailBullets_feature_div li, #detailBulletsWrapper_feature_div li, #productDetails_detailBullets_sections1 tr, #productDetails_techSpec_section_1 tr, #productDetails_db_sections tr, #productOverview_feature_div tr, #poExpander tr, #prodDetails tr",
+      ),
+    ];
+    for (const node of candidates) {
+      const label = clean(
+        node.querySelector("th, .a-text-bold, .prodDetSectionEntry")
+          ?.textContent || "",
+      ).replace(/[:：]$/, "");
+      if (!labelRegex.test(label)) continue;
+      const value = clean(
+        node.querySelector("td, .prodDetAttrValue")?.textContent ||
+          node.textContent.replace(label, ""),
+      ).replace(/^[：:]\s*/, "");
+      if (value) return value;
+    }
     const raw = detailText();
     const match = raw.match(
       new RegExp(`${labelPattern}\\s*[:：]?\\s*([^\\n]+)`, "i"),
@@ -177,6 +197,40 @@
     render();
   }
 
+  function offerFieldByLabel(node, labelPattern) {
+    const labelRegex = new RegExp(`^${labelPattern}\\b`, "i");
+    const rows = [...node.querySelectorAll(".a-row, .a-section, li, tr")];
+    for (const row of rows) {
+      const children = [...row.children].filter((child) =>
+        clean(child.textContent),
+      );
+      const labelIndex = children.findIndex((child) =>
+        labelRegex.test(clean(child.textContent).replace(/[:：]$/, "")),
+      );
+      if (labelIndex < 0) continue;
+      const value = clean(
+        children
+          .slice(labelIndex + 1)
+          .map((child) => child.textContent)
+          .join(" "),
+      );
+      if (value) return value;
+      const rowText = clean(row.textContent);
+      const match = rowText.match(
+        new RegExp(`${labelPattern}\\s*[:：]?\\s*(.+)`, "i"),
+      );
+      if (match?.[1]) return clean(match[1]);
+    }
+    const fullText = clean(node.textContent);
+    const match = fullText.match(
+      new RegExp(
+        `${labelPattern}\\s*[:：]?\\s*(.+?)(?=\\s+(?:Sold by|Seller|Fulfilled by|Ships from|Dispatches from|Condition)\\b|$)`,
+        "i",
+      ),
+    );
+    return clean(match?.[1] || "");
+  }
+
   function classifyOffer(node) {
     const fieldText = (selector) => {
       const field = node.querySelector(selector);
@@ -191,12 +245,20 @@
     )
       .replace(/^(Ships from|Dispatches from|الشحن من)\s*:?\s*/i, "")
       .trim();
+    const fulfilledBy = (
+      fieldText(
+        "#aod-offer-fulfilledBy, [id*='fulfilledBy'], [id*='fulfillment'], [id*='fulfiller']",
+      ) || offerFieldByLabel(node, "Fulfilled by|Fulfillment by|الشحن بواسطة")
+    )
+      .replace(/^(Fulfilled by|Fulfillment by|الشحن بواسطة)\s*:?\s*/i, "")
+      .trim();
     const soldByNode = node.querySelector(
       "#aod-offer-soldBy a, [id*='soldBy'] a, [id*='sold-by'] a, a[href*='seller=']",
     );
     const soldBy = clean(
       soldByNode?.textContent ||
-        fieldText("#aod-offer-soldBy, [id*='soldBy'], [id*='sold-by']"),
+        fieldText("#aod-offer-soldBy, [id*='soldBy'], [id*='sold-by']") ||
+        offerFieldByLabel(node, "Sold by|Seller|البائع"),
     )
       .replace(/^(Sold by|Seller|البائع)\s*:?\s*/i, "")
       .trim();
@@ -213,9 +275,45 @@
     return {
       name: soldBy || "Unknown seller",
       sellerId,
-      fulfillment: Core.classifyFulfillment(soldBy, shipsFrom),
-      shipsFrom,
+      fulfillment: Core.classifyFulfillment(soldBy, fulfilledBy || shipsFrom),
+      shipsFrom: fulfilledBy || shipsFrom,
     };
+  }
+
+  function observedOfferTotal() {
+    const source = firstText([
+      "#aod-ingress-link",
+      "#aod-ingress-link .a-size-small",
+      "#olpLinkWidget_feature_div",
+      "#mbc",
+    ]);
+    const match = source.match(
+      /(?:New|Used|Other sellers|offers?)\s*\(?([0-9][0-9,]*)\)?|\(([0-9][0-9,]*)\)/i,
+    );
+    return match ? Number((match[1] || match[2]).replace(/,/g, "")) : null;
+  }
+
+  function offerIngressUrls(page = 1) {
+    const urls = new Set();
+    const addUrl = (value) => {
+      if (!value) return;
+      try {
+        const url = new URL(value, location.origin);
+        if (!url.searchParams.get("asin"))
+          url.searchParams.set("asin", product.asin);
+        if (page > 1) url.searchParams.set("pageno", String(page));
+        urls.add(`${url.pathname}${url.search}`);
+      } catch (_) {}
+    };
+    document
+      .querySelectorAll(
+        "a[href*='/gp/aod'], a[href*='/gp/offer-listing'], #aod-ingress-link, [data-action*='show-all-offers'] a",
+      )
+      .forEach((node) => addUrl(node.getAttribute("href")));
+    const query = `asin=${encodeURIComponent(product.asin)}&pc=dp&experienceId=aodAjaxMain${page > 1 ? `&pageno=${page}` : ""}`;
+    urls.add(`/gp/aod/ajax?${query}`);
+    urls.add(`/gp/aod/ajax/ref=auto_load_aod?${query}`);
+    return [...urls];
   }
 
   function featuredOffer() {
@@ -256,12 +354,7 @@
   }
 
   async function fetchOfferDocument(page = 1) {
-    const query = `asin=${encodeURIComponent(product.asin)}&pc=dp&experienceId=aodAjaxMain${page > 1 ? `&pageno=${page}` : ""}`;
-    const paths = [
-      `/gp/aod/ajax?${query}`,
-      `/gp/aod/ajax/ref=auto_load_aod?${query}`,
-    ];
-    for (const url of paths) {
+    for (const url of offerIngressUrls(page)) {
       const response = await fetch(url, {
         credentials: "include",
         cache: "no-store",
@@ -300,7 +393,9 @@
         loadedDocument = true;
         const before = unique.size;
         const nodes = [
-          ...doc.querySelectorAll("#aod-offer, .aod-offer, #aod-pinned-offer"),
+          ...doc.querySelectorAll(
+            "#aod-offer, .aod-offer, #aod-pinned-offer, [id^='aod-offer-']",
+          ),
         ];
         nodes.map(classifyOffer).forEach((seller) => {
           if (seller.name === "Unknown seller" && !seller.shipsFrom) return;
@@ -317,6 +412,7 @@
         if (!hasNext || unique.size === before) break;
       }
       const sellers = [...unique.values()];
+      const advertisedTotal = observedOfferTotal();
       offers = {
         status: sellers.length
           ? "observed"
@@ -324,7 +420,7 @@
             ? "unavailable"
             : "error",
         sellers,
-        total: sellers.length,
+        total: advertisedTotal || sellers.length,
         fba: sellers.filter((seller) => seller.fulfillment === "FBA").length,
         fbm: sellers.filter((seller) => seller.fulfillment === "FBM").length,
         amazon: sellers.filter((seller) => seller.fulfillment === "Amazon")
@@ -531,7 +627,7 @@
     overviewShadow.innerHTML = `<style>${overviewStyles()}</style>
       <aside class="overview" aria-label="RizPoint product research overview">
         <div class="overview-head"><div><span>RIZPOINT</span><b>FBA overview</b></div><span class="market-pill">${marketplace.flag} ${marketplace.id}</span></div>
-        <div class="price-row"><div><small>Current price</small><strong>${Core.money(inputs.salePrice, marketplace)}</strong></div><label><small>Product cost (${marketplace.currency})</small><div><input id="rp-overview-cost" inputmode="decimal" value="${escapeHtml(inputs.productCost)}" placeholder="0.00"><button id="rp-apply-cost">Update</button></div></label></div>
+        <div class="price-row"><div><small>Current price</small><strong>${Core.money(inputs.salePrice, marketplace)}</strong></div><label><small>Product cost (${marketplace.currency})</small><div><input id="rp-overview-cost" inputmode="decimal" value="${escapeHtml(inputs.productCost)}" placeholder="0.00" aria-label="Product cost (${marketplace.currency})"></div></label></div>
         <div class="overview-metrics">
           <div><small>Net profit</small><b class="${profitClass}">${official ? Core.money(calc.profit, marketplace) : "—"}</b></div>
           <div><small>ROI</small><b class="${profitClass}">${official && calc.roi !== null ? `${calc.roi}%` : "—"}</b></div>
@@ -542,24 +638,24 @@
           ${overviewLine("ASIN", product.asin, true)}
           ${overviewLine("Parent category", listing.parentCategory || "Unavailable", Boolean(listing.parentCategory))}
           ${overviewLine("Parent BSR", listing.parentBsr ? `#${Number(listing.parentBsr).toLocaleString()}` : "Unavailable", Boolean(listing.parentBsr))}
+          ${overviewLine("Current FBA sellers", offers.fba ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
+          ${overviewLine("Current FBM sellers", offers.fbm ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
+          ${overviewLine("Total current offers", offers.total ?? (offers.status === "loading" ? "Loading…" : "Unavailable"))}
         </div>
         <div class="overview-status ${feesStatus}">${official ? "● Official Amazon fees loaded" : feesStatus === "loading" ? "Checking Amazon fees…" : feeError || "Official fees not loaded"}</div>
         <div class="overview-actions"><button id="rp-overview-open" class="primary">Full analysis</button><button id="rp-overview-refresh">Refresh fees</button></div>
       </aside>`;
     bindCopyButtons(overviewShadow);
-    const updateCost = async () => {
-      inputs.productCost =
-        overviewShadow.getElementById("rp-overview-cost").value;
-      await persistProductCost();
-      render();
-    };
-    overviewShadow
-      .getElementById("rp-apply-cost")
-      ?.addEventListener("click", updateCost);
+    let overviewCostTimer;
     overviewShadow
       .getElementById("rp-overview-cost")
-      ?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") updateCost();
+      ?.addEventListener("input", (event) => {
+        inputs.productCost = event.currentTarget.value;
+        clearTimeout(overviewCostTimer);
+        overviewCostTimer = setTimeout(async () => {
+          await persistProductCost();
+          render();
+        }, 300);
       });
     overviewShadow
       .getElementById("rp-overview-open")
@@ -575,7 +671,7 @@
 
   function overviewStyles() {
     return `
-      :host{all:initial;display:block;margin:0 0 14px;font-family:Inter,Arial,sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}.overview{border:1px solid #cfe0d6;border-radius:14px;background:#fff;box-shadow:0 8px 24px #153c2814;overflow:hidden}.overview-head{display:flex;align-items:center;justify-content:space-between;background:#102a20;color:#fff;padding:12px 13px}.overview-head>div{display:grid;gap:1px}.overview-head>div span{font-size:9px;letter-spacing:.14em;color:#91dfad;font-weight:800}.overview-head b{font-size:14px}.market-pill{font-size:10px;background:#1d4a36;padding:5px 7px;border-radius:999px}.price-row{display:grid;grid-template-columns:.8fr 1.2fr;gap:9px;padding:12px 12px 9px}.price-row>div,.price-row label{display:grid;gap:5px}.price-row small,.overview-metrics small{font-size:9px;color:#68776f}.price-row strong{font-size:19px}.price-row label>div{display:flex}.price-row input{width:100%;min-width:0;border:1px solid #cad8d0;border-radius:7px 0 0 7px;padding:7px 8px;outline:none}.price-row input:focus{border-color:#1b7a48}.price-row button{border:0;border-radius:0 7px 7px 0;background:#176e42;color:#fff;font-size:10px;font-weight:800;padding:0 8px;cursor:pointer}.overview-metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#e4ebe7;border-block:1px solid #e4ebe7}.overview-metrics>div{display:grid;gap:3px;background:#f8faf9;padding:9px 12px}.overview-metrics b{font-size:14px}.positive{color:#148447}.negative{color:#c83f49}.overview-lines{padding:9px 12px;display:grid;gap:7px}.overview-lines>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px}.overview-lines span{color:#68776f}.overview-lines b{display:flex;align-items:center;gap:5px;max-width:62%;text-align:right}.rp-copy{border:0;background:#e2eee7;color:#176e42;border-radius:5px;padding:2px 5px;cursor:pointer}.overview-status{margin:0 12px 9px;border-radius:7px;background:#eef3f0;color:#637168;padding:7px 8px;font-size:9px}.overview-status.official{background:#e2f6e9;color:#147642}.overview-status.error{background:#fde9ea;color:#ad333b}.overview-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.overview-actions button{border:1px solid #cad8d0;border-radius:8px;background:#fff;color:#176e42;padding:8px 6px;font-size:10px;font-weight:800;cursor:pointer}.overview-actions .primary{background:#176e42;color:#fff;border-color:#176e42}
+      :host{all:initial;display:block;margin:0 0 14px;font-family:Inter,Arial,sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}.overview{border:1px solid #cfe0d6;border-radius:14px;background:#fff;box-shadow:0 8px 24px #153c2814;overflow:hidden}.overview-head{display:flex;align-items:center;justify-content:space-between;background:#102a20;color:#fff;padding:12px 13px}.overview-head>div{display:grid;gap:1px}.overview-head>div span{font-size:9px;letter-spacing:.14em;color:#91dfad;font-weight:800}.overview-head b{font-size:14px}.market-pill{font-size:10px;background:#1d4a36;padding:5px 7px;border-radius:999px}.price-row{display:grid;grid-template-columns:.8fr 1.2fr;gap:9px;padding:12px 12px 9px}.price-row>div,.price-row label{display:grid;gap:5px}.price-row small,.overview-metrics small{font-size:9px;color:#68776f}.price-row strong{font-size:19px}.price-row label>div{display:flex}.price-row input{width:100%;min-width:0;border:1px solid #cad8d0;border-radius:7px;padding:7px 8px;outline:none}.price-row input:focus{border-color:#1b7a48}.overview-metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#e4ebe7;border-block:1px solid #e4ebe7}.overview-metrics>div{display:grid;gap:3px;background:#f8faf9;padding:9px 12px}.overview-metrics b{font-size:14px}.positive{color:#148447}.negative{color:#c83f49}.overview-lines{padding:9px 12px;display:grid;gap:7px}.overview-lines>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px}.overview-lines span{color:#68776f}.overview-lines b{display:flex;align-items:center;gap:5px;max-width:62%;text-align:right}.rp-copy{border:0;background:#e2eee7;color:#176e42;border-radius:5px;padding:2px 5px;cursor:pointer}.overview-status{margin:0 12px 9px;border-radius:7px;background:#eef3f0;color:#637168;padding:7px 8px;font-size:9px}.overview-status.official{background:#e2f6e9;color:#147642}.overview-status.error{background:#fde9ea;color:#ad333b}.overview-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.overview-actions button{border:1px solid #cad8d0;border-radius:8px;background:#fff;color:#176e42;padding:8px 6px;font-size:10px;font-weight:800;cursor:pointer}.overview-actions .primary{background:#176e42;color:#fff;border-color:#176e42}
     `;
   }
 
