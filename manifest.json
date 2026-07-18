@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RizPoint FBA Research",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Research Amazon products with marketplace-aware fees, profit, offers, BSR and copy tools.",
   "permissions": ["activeTab", "storage", "tabs"],
   "host_permissions": [

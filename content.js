@@ -349,7 +349,17 @@
     return true;
   }
 
-  function offerIngressUrls(page = 1) {
+  function hasObservedSeller(unique, seller) {
+    if (seller.name === "Unknown seller" && !seller.shipsFrom) return true;
+    const normalizedName = seller.name.toLowerCase().replace(/\s+/g, " ");
+    return [...unique.values()].some(
+      (item) =>
+        (seller.sellerId && item.sellerId === seller.sellerId) ||
+        item.name.toLowerCase().replace(/\s+/g, " ") === normalizedName,
+    );
+  }
+
+  function offerIngressUrls(page = 1, previousDocument = null) {
     const urls = new Set();
     const addUrl = (value) => {
       if (!value) return;
@@ -361,14 +371,26 @@
         urls.add(`${url.pathname}${url.search}`);
       } catch (_) {}
     };
-    document
-      .querySelectorAll(
-        "a[href*='/gp/aod'], a[href*='/gp/offer-listing'], #aod-ingress-link, [data-action*='show-all-offers'] a",
-      )
-      .forEach((node) => addUrl(node.getAttribute("href")));
-    const query = `asin=${encodeURIComponent(product.asin)}&pc=dp&experienceId=aodAjaxMain${page > 1 ? `&pageno=${page}` : ""}`;
-    urls.add(`/gp/aod/ajax?${query}`);
-    urls.add(`/gp/aod/ajax/ref=auto_load_aod?${query}`);
+
+    if (page > 1 && previousDocument) {
+      previousDocument
+        .querySelectorAll(
+          "#aod-pagn-next-link[href], .a-pagination .a-last:not(.a-disabled) a[href], a[href*='/gp/aod/ajax'][href*='pageno=']",
+        )
+        .forEach((node) => addUrl(node.getAttribute("href")));
+    }
+
+    Core.amazonOfferPageUrls(product.asin, page).forEach((url) =>
+      urls.add(url),
+    );
+
+    if (page === 1) {
+      document
+        .querySelectorAll(
+          "a[href*='/gp/aod'], a[href*='/gp/offer-listing'], #aod-ingress-link, [data-action*='show-all-offers'] a",
+        )
+        .forEach((node) => addUrl(node.getAttribute("href")));
+    }
     return [...urls];
   }
 
@@ -409,29 +431,47 @@
     };
   }
 
-  async function fetchOfferDocument(page = 1) {
-    for (const url of offerIngressUrls(page)) {
-      const response = await fetch(url, {
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          Accept: "text/html, */*; q=0.01",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-      });
+  async function fetchOfferDocument(
+    page = 1,
+    previousDocument = null,
+    knownSellers = null,
+  ) {
+    let fallback = null;
+    for (const url of offerIngressUrls(page, previousDocument)) {
+      let response;
+      try {
+        response = await fetch(url, {
+          credentials: "include",
+          cache: "no-store",
+          headers: {
+            Accept: "text/html, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+        });
+      } catch (_) {
+        continue;
+      }
       if (!response.ok) continue;
       const html = await response.text();
       if (!html || /validateCaptcha|enter the characters you see/i.test(html))
         continue;
       const doc = new DOMParser().parseFromString(html, "text/html");
       if (
-        doc.querySelector(
+        !doc.querySelector(
           "#aod-offer, .aod-offer, #aod-pinned-offer, #aod-container",
         )
       )
+        continue;
+      fallback ||= doc;
+      if (
+        !knownSellers ||
+        offerNodes(doc)
+          .map(classifyOffer)
+          .some((seller) => !hasObservedSeller(knownSellers, seller))
+      )
         return doc;
     }
-    return null;
+    return fallback;
   }
 
   async function loadOffers(force = false) {
@@ -455,10 +495,12 @@
           .forEach((seller) => addObservedSeller(unique, seller));
       }
       let stagnantPages = 0;
+      let previousDocument = null;
       for (let page = 1; page <= 20; page += 1) {
         if (advertisedTotal && unique.size >= advertisedTotal) break;
-        const doc = await fetchOfferDocument(page);
+        const doc = await fetchOfferDocument(page, previousDocument, unique);
         if (!doc) break;
+        previousDocument = doc;
         loadedDocument = true;
         const before = unique.size;
         advertisedTotal = offerTotalFromDocument(doc, advertisedTotal);
@@ -628,7 +670,7 @@
                   ? `<div class="rp-card">
                 <div class="rp-card-title"><h4>Observed offers</h4><button id="rp-refresh-offers" class="link">Refresh</button></div>
                 <div class="rp-grid offers">${metric("FBA", displayedOfferCount(offers.fba))}${metric("FBM", displayedOfferCount(offers.fbm))}${metric("Amazon", displayedOfferCount(offers.amazon))}${metric("Total sellers", offers.total ?? "—")}</div>
-                <p class="rp-note">${offers.status === "partial" ? `${escapeHtml(offers.error)}. Open Amazon’s “See all buying options” panel once to let the extension classify the remaining sellers automatically.` : "Counts are unique sellers classified from Amazon’s current offer list for this browser and delivery location."}</p>
+                <p class="rp-note">${offers.status === "partial" ? `${escapeHtml(offers.error)}. Use Refresh to retry Amazon’s remaining offer pages.` : "Counts are unique sellers classified automatically from Amazon’s current offer list for this browser and delivery location."}</p>
                 <div class="rp-sellers">${
                   offers.sellers
                     .slice(0, 30)

@@ -4,6 +4,18 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-18
+
+### Fixed
+
+- Load Amazon's dedicated `aod_page_2`, `aod_page_3`, and later lazy offer pages automatically instead of repeatedly receiving the first offer batch.
+- Follow Amazon-provided next-page links when present and fall back across endpoint variants if a response contains only sellers already classified.
+- Continue trying alternate offer endpoints after an individual request fails.
+
+### Changed
+
+- Seller counts no longer depend on opening or scrolling Amazon's Other Sellers panel.
+
 ## [0.2.1] - 2026-07-18
 
 ### Fixed

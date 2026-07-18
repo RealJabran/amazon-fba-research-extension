@@ -23,6 +23,19 @@ test("extracts ASIN only from valid product identifiers", () => {
   assert.equal(Core.parseAsin("not-an-asin"), null);
 });
 
+test("uses Amazon's dedicated lazy-load route for every later offer page", () => {
+  assert.deepEqual(Core.amazonOfferPageUrls("B07MX7KPF2", 1).slice(0, 1), [
+    "/gp/aod/ajax/ref=auto_load_aod?asin=B07MX7KPF2&pc=dp&experienceId=aodAjaxMain",
+  ]);
+  const secondPage = Core.amazonOfferPageUrls("B07MX7KPF2", 2);
+  assert.match(secondPage[0], /\/ref=aod_page_2\?/);
+  assert.match(secondPage[0], /(?:\?|&)pageno=2(?:&|$)/);
+  assert.equal(
+    secondPage.some((url) => url.includes("auto_load_aod")),
+    false,
+  );
+});
+
 test("normalizes common marketplace number formats", () => {
   assert.equal(Core.normalizeNumber("$1,234.56"), 1234.56);
   assert.equal(Core.normalizeNumber("£1.234,56"), 1234.56);

@@ -102,6 +102,24 @@
     return exact ? exact[0].toUpperCase() : null;
   }
 
+  function amazonOfferPageUrls(asin, page = 1) {
+    const productAsin = parseAsin(asin);
+    if (!productAsin) return [];
+    const pageNumber = Math.max(1, Math.trunc(Number(page) || 1));
+    const query = `asin=${encodeURIComponent(productAsin)}&pc=dp&experienceId=aodAjaxMain`;
+    if (pageNumber === 1) {
+      return [
+        `/gp/aod/ajax/ref=auto_load_aod?${query}`,
+        `/gp/aod/ajax?${query}`,
+      ];
+    }
+    return [
+      `/gp/aod/ajax/ref=aod_page_${pageNumber}?${query}&pageno=${pageNumber}`,
+      `/gp/aod/ajax/ref=aod_page_${pageNumber}?asin=${encodeURIComponent(productAsin)}&pc=dp&pageno=${pageNumber}`,
+      `/gp/aod/ajax?${query}&pageno=${pageNumber}`,
+    ];
+  }
+
   function parseRankText(value) {
     const source = String(value || "")
       .replace(/[\u200e\u200f\u202a-\u202e]/g, " ")
@@ -353,6 +371,7 @@
     DEFAULT_SETTINGS,
     marketplaceFromHost,
     parseAsin,
+    amazonOfferPageUrls,
     parseRankText,
     categoryIntelligence,
     classifyFulfillment,
