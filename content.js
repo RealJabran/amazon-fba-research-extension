@@ -156,6 +156,34 @@
     settings = Core.mergeSettings(response?.settings);
   }
 
+  function canonicalizeCurrentProductUrl() {
+    if (!settings.canonicalizeProductUrls) return false;
+    const canonical = Core.canonicalProductUrl(location.href);
+    if (!canonical || !Core.shouldCanonicalizeProductUrl(location.href))
+      return false;
+    location.replace(canonical);
+    return true;
+  }
+
+  async function setCanonicalizeProductUrls(enabled) {
+    const previous = settings;
+    settings = Core.mergeSettings({
+      ...settings,
+      canonicalizeProductUrls: Boolean(enabled),
+    });
+    render();
+    const response = await chrome.runtime.sendMessage({
+      type: "SAVE_SETTINGS",
+      settings,
+    });
+    if (!response?.ok) {
+      settings = previous;
+      render();
+      return;
+    }
+    if (enabled) canonicalizeCurrentProductUrl();
+  }
+
   function currentTaxRate() {
     return settings.taxRateOverride === ""
       ? marketplace.vatRate
@@ -565,9 +593,9 @@
       );
       const filteredPinnedIsPrime = Boolean(
         filteredPinnedNode &&
-          ["FBA", "Amazon"].includes(
-            classifyOffer(filteredPinnedNode).fulfillment,
-          ),
+        ["FBA", "Amazon"].includes(
+          classifyOffer(filteredPinnedNode).fulfillment,
+        ),
       );
       const featuredIsPrime = ["FBA", "Amazon"].includes(featured?.fulfillment);
       const total = Core.offerTotalFromFilterLabel(
@@ -884,6 +912,7 @@
     overviewShadow.innerHTML = `<style>${overviewStyles()}</style>
       <aside class="overview" aria-label="RizPoint product research overview">
         <div class="overview-head"><div><span>RIZPOINT</span><b>FBA overview</b></div><span class="market-pill">${marketplace.flag} ${marketplace.id}</span></div>
+        <label class="clean-url"><span><b>Clean seller URL</b><small>${settings.canonicalizeProductUrls ? "ON · normal Buy Box view" : "OFF · keep current link"}</small></span><input id="rp-clean-url" type="checkbox" ${settings.canonicalizeProductUrls ? "checked" : ""} aria-label="Clean seller and store product URLs"><i aria-hidden="true"></i></label>
         <div class="price-row"><div><small>Current price</small><strong>${Core.money(inputs.salePrice, marketplace)}</strong></div><label><small>Product cost (${marketplace.currency})</small><div><input id="rp-overview-cost" inputmode="decimal" value="${escapeHtml(inputs.productCost)}" placeholder="0.00" aria-label="Product cost (${marketplace.currency})"></div></label></div>
         <div class="overview-metrics">
           <div><small>Net profit</small><b class="${profitClass}">${official ? Core.money(calc.profit, marketplace) : "—"}</b></div>
@@ -920,6 +949,11 @@
     overviewShadow
       .getElementById("rp-overview-refresh")
       ?.addEventListener("click", () => loadFees(true));
+    overviewShadow
+      .getElementById("rp-clean-url")
+      ?.addEventListener("change", (event) =>
+        setCanonicalizeProductUrls(event.currentTarget.checked),
+      );
   }
 
   function overviewLine(label, value, copy = false) {
@@ -928,7 +962,7 @@
 
   function overviewStyles() {
     return `
-      :host{all:initial;display:block;margin:0 0 14px;font-family:Inter,Arial,sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}.overview{border:1px solid #cfe0d6;border-radius:14px;background:#fff;box-shadow:0 8px 24px #153c2814;overflow:hidden}.overview-head{display:flex;align-items:center;justify-content:space-between;background:#102a20;color:#fff;padding:12px 13px}.overview-head>div{display:grid;gap:1px}.overview-head>div span{font-size:9px;letter-spacing:.14em;color:#91dfad;font-weight:800}.overview-head b{font-size:14px}.market-pill{font-size:10px;background:#1d4a36;padding:5px 7px;border-radius:999px}.price-row{display:grid;grid-template-columns:.8fr 1.2fr;gap:9px;padding:12px 12px 9px}.price-row>div,.price-row label{display:grid;gap:5px}.price-row small,.overview-metrics small{font-size:9px;color:#68776f}.price-row strong{font-size:19px}.price-row label>div{display:flex}.price-row input{width:100%;min-width:0;border:1px solid #cad8d0;border-radius:7px;padding:7px 8px;outline:none}.price-row input:focus{border-color:#1b7a48}.overview-metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#e4ebe7;border-block:1px solid #e4ebe7}.overview-metrics>div{display:grid;gap:3px;background:#f8faf9;padding:9px 12px}.overview-metrics b{font-size:14px}.positive{color:#148447}.negative{color:#c83f49}.overview-lines{padding:9px 12px;display:grid;gap:7px}.overview-lines>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px}.overview-lines span{color:#68776f}.overview-lines b{display:flex;align-items:center;gap:5px;max-width:62%;text-align:right}.rp-copy{border:0;background:#e2eee7;color:#176e42;border-radius:5px;padding:2px 5px;cursor:pointer}.overview-status{margin:0 12px 9px;border-radius:7px;background:#eef3f0;color:#637168;padding:7px 8px;font-size:9px}.overview-status.official{background:#e2f6e9;color:#147642}.overview-status.error{background:#fde9ea;color:#ad333b}.overview-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.overview-actions button{border:1px solid #cad8d0;border-radius:8px;background:#fff;color:#176e42;padding:8px 6px;font-size:10px;font-weight:800;cursor:pointer}.overview-actions .primary{background:#176e42;color:#fff;border-color:#176e42}
+      :host{all:initial;display:block;margin:0 0 14px;font-family:Inter,Arial,sans-serif;color:#17231d}*{box-sizing:border-box}button,input{font:inherit}.overview{border:1px solid #cfe0d6;border-radius:14px;background:#fff;box-shadow:0 8px 24px #153c2814;overflow:hidden}.overview-head{display:flex;align-items:center;justify-content:space-between;background:#102a20;color:#fff;padding:12px 13px}.overview-head>div{display:grid;gap:1px}.overview-head>div span{font-size:9px;letter-spacing:.14em;color:#91dfad;font-weight:800}.overview-head b{font-size:14px}.market-pill{font-size:10px;background:#1d4a36;padding:5px 7px;border-radius:999px}.clean-url{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:#edf7f1;border-bottom:1px solid #dce9e1;cursor:pointer}.clean-url>span{display:grid;gap:1px}.clean-url b{font-size:10px;color:#194b32}.clean-url small{font-size:8px;color:#6b7c72}.clean-url input{position:absolute;opacity:0;pointer-events:none}.clean-url i{position:relative;width:32px;height:18px;border-radius:99px;background:#b9c7bf;transition:.18s}.clean-url i:after{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:.18s}.clean-url input:checked+i{background:#16804a}.clean-url input:checked+i:after{transform:translateX(14px)}.clean-url input:focus-visible+i{outline:2px solid #2a8d59;outline-offset:2px}.price-row{display:grid;grid-template-columns:.8fr 1.2fr;gap:9px;padding:12px 12px 9px}.price-row>div,.price-row label{display:grid;gap:5px}.price-row small,.overview-metrics small{font-size:9px;color:#68776f}.price-row strong{font-size:19px}.price-row label>div{display:flex}.price-row input{width:100%;min-width:0;border:1px solid #cad8d0;border-radius:7px;padding:7px 8px;outline:none}.price-row input:focus{border-color:#1b7a48}.overview-metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#e4ebe7;border-block:1px solid #e4ebe7}.overview-metrics>div{display:grid;gap:3px;background:#f8faf9;padding:9px 12px}.overview-metrics b{font-size:14px}.positive{color:#148447}.negative{color:#c83f49}.overview-lines{padding:9px 12px;display:grid;gap:7px}.overview-lines>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px}.overview-lines span{color:#68776f}.overview-lines b{display:flex;align-items:center;gap:5px;max-width:62%;text-align:right}.rp-copy{border:0;background:#e2eee7;color:#176e42;border-radius:5px;padding:2px 5px;cursor:pointer}.overview-status{margin:0 12px 9px;border-radius:7px;background:#eef3f0;color:#637168;padding:7px 8px;font-size:9px}.overview-status.official{background:#e2f6e9;color:#147642}.overview-status.error{background:#fde9ea;color:#ad333b}.overview-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.overview-actions button{border:1px solid #cad8d0;border-radius:8px;background:#fff;color:#176e42;padding:8px 6px;font-size:10px;font-weight:800;cursor:pointer}.overview-actions .primary{background:#176e42;color:#fff;border-color:#176e42}
     `;
   }
 
@@ -1167,8 +1201,15 @@
     }
   });
 
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "sync" || !changes.settings?.newValue) return;
+    settings = Core.mergeSettings(changes.settings.newValue);
+    if (!canonicalizeCurrentProductUrl()) render();
+  });
+
   (async () => {
     await loadSettings();
+    if (canonicalizeCurrentProductUrl()) return;
     await refresh();
     let previousUrl = location.href;
     const observer = new MutationObserver(() => {

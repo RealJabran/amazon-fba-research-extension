@@ -59,6 +59,7 @@
   const DEFAULT_SETTINGS = Object.freeze({
     settingsVersion: 2,
     showFloatingWidget: true,
+    canonicalizeProductUrls: false,
     autoLoadOfficialFees: true,
     autoLoadOffers: true,
     includeStorageFee: true,
@@ -101,6 +102,27 @@
     if (urlMatch) return urlMatch[1].toUpperCase();
     const exact = text.trim().match(/^[A-Z0-9]{10}$/i);
     return exact ? exact[0].toUpperCase() : null;
+  }
+
+  function canonicalProductUrl(value) {
+    const asin = parseAsin(value);
+    if (!asin) return null;
+    try {
+      const url = new URL(String(value));
+      return `${url.origin}/dp/${asin}/`;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function shouldCanonicalizeProductUrl(value) {
+    const canonical = canonicalProductUrl(value);
+    if (!canonical) return false;
+    try {
+      return new URL(String(value)).href !== canonical;
+    } catch (_) {
+      return false;
+    }
   }
 
   function amazonOfferPageUrls(asin, page = 1) {
@@ -484,6 +506,8 @@
     DEFAULT_SETTINGS,
     marketplaceFromHost,
     parseAsin,
+    canonicalProductUrl,
+    shouldCanonicalizeProductUrl,
     amazonOfferPageUrls,
     amazonOfferFilterUrls,
     parseRankText,

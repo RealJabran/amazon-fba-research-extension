@@ -4,6 +4,18 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-19
+
+### Added
+
+- Add an optional **Clean seller URL** switch directly to the Buy Box research widget.
+- Add the same persistent automation setting to the extension Settings page.
+
+### Changed
+
+- When enabled, seller/store/referral product links reload as the marketplace's canonical `/dp/ASIN/` URL so Amazon can resolve the normal Buy Box context.
+- Apply setting changes from another extension page immediately to already-open Amazon tabs.
+
 ## [0.2.4] - 2026-07-19
 
 ### Fixed

@@ -102,6 +102,10 @@ input[inputmode] {
   font-size: 11px;
   color: #738078;
 }
+.automation-note {
+  margin: -4px 0 12px 28px;
+  line-height: 1.45;
+}
 .save {
   display: flex;
   align-items: center;

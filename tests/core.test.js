@@ -23,6 +23,24 @@ test("extracts ASIN only from valid product identifiers", () => {
   assert.equal(Core.parseAsin("not-an-asin"), null);
 });
 
+test("builds a clean product URL without seller or referral context", () => {
+  const sellerUrl =
+    "https://www.amazon.ae/Example/dp/B019OAWUZ4/ref=sr_1_1?m=A123&seller=A123&th=1";
+  assert.equal(
+    Core.canonicalProductUrl(sellerUrl),
+    "https://www.amazon.ae/dp/B019OAWUZ4/",
+  );
+  assert.equal(Core.shouldCanonicalizeProductUrl(sellerUrl), true);
+  assert.equal(
+    Core.shouldCanonicalizeProductUrl("https://www.amazon.ae/dp/B019OAWUZ4/"),
+    false,
+  );
+  assert.equal(
+    Core.canonicalProductUrl("https://www.amazon.ae/stores/x"),
+    null,
+  );
+});
+
 test("uses Amazon's dedicated lazy-load route for every later offer page", () => {
   assert.deepEqual(Core.amazonOfferPageUrls("B07MX7KPF2", 1).slice(0, 1), [
     "/gp/aod/ajax/ref=auto_load_aod?asin=B07MX7KPF2&pc=dp&experienceId=aodAjaxMain",
