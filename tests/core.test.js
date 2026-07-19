@@ -39,8 +39,62 @@ test("uses Amazon's dedicated lazy-load route for every later offer page", () =>
 test("builds Amazon's Prime offer-filter request from inspected markup", () => {
   const urls = Core.amazonOfferFilterUrls("B07MX7KPF2", "primeEligible");
   assert.match(urls[0], /\/ref=aod_f_primeEligible\?/);
-  assert.match(urls[0], /filters=%7B%22primeEligible%22%3Atrue%7D/);
+  assert.match(
+    urls[0],
+    /filters=%257B%2522all%2522%253Atrue%252C%2522primeEligible%2522%253Atrue%257D/,
+  );
+  assert.match(urls[0], /(?:\?|&)pageno=1(?:&|$)/);
   assert.deepEqual(Core.amazonOfferFilterUrls("invalid", "primeEligible"), []);
+});
+
+test("parses only explicit Amazon fee fields and ignores response metadata", () => {
+  const fees = Core.parseAmazonFeeResult({
+    data: {
+      programFeeResultMap: {
+        "Core#0": {
+          otherFeeInfoMap: {
+            ReferralFee: { total: { amount: "2.02" } },
+            FulfillmentFee: { total: { amount: "8.20" } },
+            PerItemFee: { total: { amount: "0.00" } },
+            VariableClosingFee: { total: { amount: "0.00" } },
+            ReferralFeePercentage: { total: { amount: "2.60" } },
+          },
+          perUnitNonPeakStorageFee: { amount: "0.05" },
+        },
+      },
+    },
+  });
+  assert.equal(fees.referralFee, "2.02");
+  assert.equal(fees.fulfillmentFee, "8.2");
+  assert.equal(fees.perItemFee, "0");
+  assert.equal(fees.otherAmazonFee, "0");
+  assert.equal(fees.storageFee, "0.05");
+  assert.deepEqual(fees.ignoredFeeNames, ["ReferralFeePercentage"]);
+});
+
+test("matches the official UAE calculator fee total in the supplied example", () => {
+  const result = Core.calculateProfit({
+    salePrice: "25.19",
+    productCost: "0",
+    feeComponents: {
+      referralFee: "2.02",
+      fulfillmentFee: "8.20",
+      perItemFee: "0",
+      closingFee: "0",
+      storageFee: "0.05",
+    },
+    includeStorageFee: true,
+  });
+  assert.equal(result.amazonFees, "10.27");
+  assert.equal(result.profit, "14.92");
+});
+
+test("includes Amazon's per-item fee when one is returned", () => {
+  const result = Core.calculateProfit({
+    salePrice: "20",
+    feeComponents: { referralFee: "3", perItemFee: "0.99" },
+  });
+  assert.equal(result.amazonFees, "3.99");
 });
 
 test("normalizes common marketplace number formats", () => {

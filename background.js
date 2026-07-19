@@ -15,8 +15,13 @@ const marketById = Object.values(MARKETPLACES).reduce(
 
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.sync.get("settings");
-  if (!stored.settings)
-    await chrome.storage.sync.set({ settings: DEFAULT_SETTINGS });
+  const currentVersion = Number(stored.settings?.settingsVersion || 0);
+  const next = mergeSettings(stored.settings);
+  if (currentVersion < 2) {
+    next.includeStorageFee = true;
+    next.settingsVersion = 2;
+  }
+  await chrome.storage.sync.set({ settings: next });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -95,48 +100,6 @@ function findMatchedProduct(data, asin) {
   );
 }
 
-function amount(value) {
-  return (
-    RizPointCore.normalizeDecimal(
-      value?.total?.amount ?? value?.amount ?? value,
-    ) ?? "0"
-  );
-}
-
-function parseFeeResult(data) {
-  const core = data?.data?.programFeeResultMap?.["Core#0"];
-  if (!core)
-    throw new Error(
-      "Amazon returned no FBA fee result for this ASIN and price",
-    );
-  const map = core.otherFeeInfoMap || {};
-  const known = new Set([
-    "ReferralFee",
-    "FulfillmentFee",
-    "FixedClosingFee",
-    "VariableClosingFee",
-    "DigitalServicesFee",
-  ]);
-  const otherAmazonFee = RizPointCore.sumDecimals(
-    Object.entries(map)
-      .filter(([key]) => !known.has(key))
-      .map(([, value]) => amount(value)),
-  );
-  return {
-    referralFee: amount(map.ReferralFee),
-    fulfillmentFee: amount(map.FulfillmentFee),
-    closingFee: RizPointCore.sumDecimals([
-      amount(map.FixedClosingFee),
-      amount(map.VariableClosingFee),
-    ]),
-    digitalServicesFee: amount(map.DigitalServicesFee),
-    otherAmazonFee,
-    storageFee: amount(core.perUnitNonPeakStorageFee),
-    peakStorageFee: amount(core.perUnitPeakStorageFee),
-    rawFeeNames: Object.keys(map),
-  };
-}
-
 async function getOfficialFees(payload) {
   const market = marketById[payload?.marketplaceId];
   const asin = String(payload?.asin || "").toUpperCase();
@@ -182,18 +145,24 @@ async function getOfficialFees(payload) {
       body: JSON.stringify(body),
     },
   );
+  const parsedFees = RizPointCore.parseAmazonFeeResult(feeData);
+  if (!parsedFees)
+    throw new Error(
+      "Amazon returned no FBA fee result for this ASIN and price",
+    );
   return {
     ok: true,
     source: "Amazon Revenue Calculator",
     sourceUrl: calculatorUrl(market),
     fetchedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    calculatedAtPrice: String(price),
     productGroup: gl,
     officialProduct: {
       title: product.title || null,
       salesRank: product.salesRank || null,
       salesRankCategory: product.salesRankContextName || null,
     },
-    fees: parseFeeResult(feeData),
+    fees: parsedFees,
   };
 }

@@ -4,6 +4,21 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-19
+
+### Fixed
+
+- Stop treating unknown Revenue Calculator response fields as Amazon charges. This removes the false `Other Amazon fees` amount shown in the UAE example.
+- Include Amazon's explicit per-item fee and monthly storage estimate in the profit calculation, matching the official calculator's cost-per-unit breakdown.
+- Keep fee results tied to the exact ASIN and selling price that requested them so a slower, older response cannot replace current data.
+- Follow Buy Box price changes automatically until the selling price is manually overridden.
+- Request Amazon's Prime-filtered offer result with Amazon's double-encoded `all + primeEligible` filter state, first-page state, and filter metadata from the automatically loaded AOD response.
+
+### Changed
+
+- Show the exact selling price submitted to Amazon beside the fee result.
+- Migrate existing installations to include Amazon's storage estimate by default.
+
 ## [0.2.3] - 2026-07-18
 
 ### Added

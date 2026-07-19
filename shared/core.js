@@ -57,10 +57,11 @@
   });
 
   const DEFAULT_SETTINGS = Object.freeze({
+    settingsVersion: 2,
     showFloatingWidget: true,
     autoLoadOfficialFees: true,
     autoLoadOffers: true,
-    includeStorageFee: false,
+    includeStorageFee: true,
     includeTaxReserve: false,
     taxRateOverride: "",
     defaultProductCost: "",
@@ -125,14 +126,19 @@
     const normalizedFilter = String(filterId || "").trim();
     if (!productAsin || !/^[A-Za-z][A-Za-z0-9]*$/.test(normalizedFilter))
       return [];
-    const filters = encodeURIComponent(
-      JSON.stringify({ [normalizedFilter]: true }),
-    );
+    const filterState = JSON.stringify({
+      all: true,
+      [normalizedFilter]: true,
+    });
+    const filters = encodeURIComponent(filterState);
+    const doubleEncodedFilters = encodeURIComponent(filters);
     const query = `asin=${encodeURIComponent(productAsin)}&pc=dp`;
     const refMarker = `aod_f_${normalizedFilter}`;
     return [
-      `/gp/aod/ajax/ref=${refMarker}?${query}&experienceId=aodAjaxMain&filters=${filters}`,
-      `/gp/aod/ajax/ref=${refMarker}?${query}&filters=${filters}`,
+      `/gp/aod/ajax/ref=${refMarker}?asin=${encodeURIComponent(productAsin)}&pageno=1&pc=dp&filters=${doubleEncodedFilters}`,
+      `/gp/aod/ajax/ref=${refMarker}?asin=${encodeURIComponent(productAsin)}&pageno=1&pc=dp&filters=${doubleEncodedFilters}&experienceId=aodAjaxMain`,
+      `/gp/aod/ajax/ref=${refMarker}?${query}&filters=${filters}&pageno=1`,
+      `/gp/aod/ajax?${query}&experienceId=aodAjaxMain&filters=${filters}&pageno=1&ref_=${refMarker}`,
     ];
   }
 
@@ -345,6 +351,49 @@
     );
   }
 
+  function feeAmount(value) {
+    return (
+      normalizeDecimal(
+        value?.total?.amount ??
+          value?.feeAmount?.amount ??
+          value?.feeAmount ??
+          value?.amount ??
+          value,
+      ) ?? "0"
+    );
+  }
+
+  function parseAmazonFeeResult(data) {
+    const core = data?.data?.programFeeResultMap?.["Core#0"];
+    if (!core) return null;
+    const map = core.otherFeeInfoMap || {};
+    const recognized = new Set([
+      "ReferralFee",
+      "FulfillmentFee",
+      "PerItemFee",
+      "FixedClosingFee",
+      "VariableClosingFee",
+      "DigitalServicesFee",
+    ]);
+    return {
+      referralFee: feeAmount(map.ReferralFee),
+      fulfillmentFee: feeAmount(map.FulfillmentFee),
+      perItemFee: feeAmount(map.PerItemFee),
+      closingFee: sumDecimals([
+        feeAmount(map.FixedClosingFee),
+        feeAmount(map.VariableClosingFee),
+      ]),
+      digitalServicesFee: feeAmount(map.DigitalServicesFee),
+      // Never turn an unknown response field into a charge. Amazon's response
+      // also carries percentages, discounts, and display-only values here.
+      otherAmazonFee: "0",
+      storageFee: feeAmount(core.perUnitNonPeakStorageFee),
+      peakStorageFee: feeAmount(core.perUnitPeakStorageFee),
+      rawFeeNames: Object.keys(map),
+      ignoredFeeNames: Object.keys(map).filter((key) => !recognized.has(key)),
+    };
+  }
+
   function money(value, marketplace) {
     const amount = normalizeNumber(value);
     if (amount === null) return "—";
@@ -369,6 +418,7 @@
     const feeComponents = input.feeComponents || {};
     const referralFee = toScaled(feeComponents.referralFee);
     const fulfillmentFee = toScaled(feeComponents.fulfillmentFee);
+    const perItemFee = toScaled(feeComponents.perItemFee);
     const closingFee = toScaled(feeComponents.closingFee);
     const digitalServicesFee = toScaled(feeComponents.digitalServicesFee);
     const otherAmazonFee = toScaled(feeComponents.otherAmazonFee);
@@ -384,6 +434,7 @@
     const amazonFees =
       referralFee +
       fulfillmentFee +
+      perItemFee +
       closingFee +
       digitalServicesFee +
       otherAmazonFee +
@@ -407,6 +458,7 @@
       components: {
         referralFee: scaledString(referralFee),
         fulfillmentFee: scaledString(fulfillmentFee),
+        perItemFee: scaledString(perItemFee),
         closingFee: scaledString(closingFee),
         digitalServicesFee: scaledString(digitalServicesFee),
         otherAmazonFee: scaledString(otherAmazonFee),
@@ -444,6 +496,7 @@
     normalizeDecimal,
     money,
     sumDecimals,
+    parseAmazonFeeResult,
     calculateProfit,
     calculatorUrl,
     mergeSettings,

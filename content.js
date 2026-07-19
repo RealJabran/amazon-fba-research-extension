@@ -29,6 +29,9 @@
   let overviewHost;
   let overviewShadow;
   let lastFingerprint = "";
+  let feeRequestSequence = 0;
+  let offerRequestSequence = 0;
+  let salePriceManuallyEdited = false;
   let refreshTimer;
   let aodRefreshTimer;
   let observedAodContainer;
@@ -174,19 +177,33 @@
     const fingerprint = `${marketplace.id}:${product.asin}:${inputs.salePrice}`;
     if (!force && fingerprint === lastFingerprint) return;
     lastFingerprint = fingerprint;
+    const requestId = ++feeRequestSequence;
     feesStatus = "loading";
     feeError = "";
     render();
-    const response = await chrome.runtime.sendMessage({
-      type: "GET_OFFICIAL_FEES",
-      payload: {
-        marketplaceId: marketplace.id,
-        asin: product.asin,
-        price: inputs.salePrice,
-      },
-    });
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: "GET_OFFICIAL_FEES",
+        payload: {
+          marketplaceId: marketplace.id,
+          asin: product.asin,
+          price: inputs.salePrice,
+        },
+      });
+    } catch (error) {
+      response = { ok: false, error: error.message };
+    }
+    if (
+      requestId !== feeRequestSequence ||
+      fingerprint !== `${marketplace.id}:${product?.asin}:${inputs.salePrice}`
+    )
+      return;
     if (response?.ok) {
-      fees = response.fees;
+      fees = {
+        ...response.fees,
+        calculatedAtPrice: response.calculatedAtPrice || inputs.salePrice,
+      };
       feesStatus = "official";
       product.official = response.officialProduct;
       product.productGroup = response.productGroup;
@@ -486,11 +503,43 @@
     return fallback;
   }
 
-  async function fetchPrimeOfferTotal(featured) {
-    for (const url of Core.amazonOfferFilterUrls(
-      product.asin,
-      "primeEligible",
-    )) {
+  function primeFilterId(doc) {
+    for (const node of doc?.querySelectorAll?.(
+      "[data-aod-toggle-filter-checkbox]",
+    ) || []) {
+      try {
+        const action = JSON.parse(
+          node.getAttribute("data-aod-toggle-filter-checkbox") || "{}",
+        );
+        if (/prime/i.test(action.checkboxID || action.refMarker || ""))
+          return action.checkboxID || "primeEligible";
+      } catch (_) {}
+    }
+    return "primeEligible";
+  }
+
+  function filterCountLabel(doc) {
+    const nodes = [
+      doc.querySelector("#aod-filter-offer-count-string"),
+      doc.querySelector("#aod-total-offer-count-string"),
+      doc.querySelector("#aod-total-offer-count"),
+    ];
+    return clean(
+      nodes
+        .map(
+          (node) =>
+            node?.textContent ||
+            node?.value ||
+            node?.getAttribute?.("value") ||
+            "",
+        )
+        .find(Boolean) || "",
+    );
+  }
+
+  async function fetchPrimeOfferTotal(featured, sourceDocument = null) {
+    const filterId = primeFilterId(sourceDocument);
+    for (const url of Core.amazonOfferFilterUrls(product.asin, filterId)) {
       let response;
       try {
         response = await fetch(url, {
@@ -509,19 +558,21 @@
       if (!html || /validateCaptcha|enter the characters you see/i.test(html))
         continue;
       const doc = new DOMParser().parseFromString(html, "text/html");
-      const label = clean(
-        doc.querySelector("#aod-filter-offer-count-string")?.textContent ||
-          doc.querySelector("#aod-total-offer-count-string")?.value ||
-          "",
-      );
+      const label = filterCountLabel(doc);
       if (!label) continue;
-      const filteredPinnedOffer = Boolean(
-        doc.querySelector("#aod-sticky-pinned-offer, #aod-pinned-offer"),
+      const filteredPinnedNode = doc.querySelector(
+        "#aod-sticky-pinned-offer, #aod-pinned-offer",
+      );
+      const filteredPinnedIsPrime = Boolean(
+        filteredPinnedNode &&
+          ["FBA", "Amazon"].includes(
+            classifyOffer(filteredPinnedNode).fulfillment,
+          ),
       );
       const featuredIsPrime = ["FBA", "Amazon"].includes(featured?.fulfillment);
       const total = Core.offerTotalFromFilterLabel(
         label,
-        filteredPinnedOffer || featuredIsPrime,
+        filteredPinnedIsPrime || featuredIsPrime,
       );
       if (total !== null) return total;
     }
@@ -530,13 +581,14 @@
 
   async function loadOffers(force = false) {
     if (!product?.asin || (offers.status === "loading" && !force)) return;
+    const requestId = ++offerRequestSequence;
+    const requestedAsin = product.asin;
     offers = { ...offers, status: "loading" };
     render();
     try {
       const unique = new Map();
       const featured = featuredOffer();
       if (featured) addObservedSeller(unique, featured);
-      const primeTotalPromise = fetchPrimeOfferTotal(featured);
       let primeTotal = null;
       let advertisedTotal = observedOfferTotal(featured);
       let loadedDocument = false;
@@ -564,7 +616,7 @@
           .map(classifyOffer)
           .forEach((seller) => addObservedSeller(unique, seller));
         if (page === 1) {
-          primeTotal = await primeTotalPromise;
+          primeTotal = await fetchPrimeOfferTotal(featured, doc);
           const earlyBreakdown = Core.offerBreakdownFromPrimeFilter({
             total: advertisedTotal || unique.size,
             primeTotal,
@@ -591,13 +643,15 @@
       const observedAmazon = sellers.filter(
         (seller) => seller.fulfillment === "Amazon",
       ).length;
-      primeTotal ??= await primeTotalPromise;
+      primeTotal ??= await fetchPrimeOfferTotal(featured, previousDocument);
       const primeBreakdown = Core.offerBreakdownFromPrimeFilter({
         total: advertisedTotal || sellers.length,
         primeTotal,
         amazon: observedAmazon,
       });
       const complete = Boolean(primeBreakdown || sellersComplete);
+      if (requestId !== offerRequestSequence || product?.asin !== requestedAsin)
+        return;
       offers = {
         status: complete
           ? "observed"
@@ -635,6 +689,8 @@
           total: null,
         });
     } catch (error) {
+      if (requestId !== offerRequestSequence || product?.asin !== requestedAsin)
+        return;
       offers = {
         status: "error",
         error: error.message,
@@ -740,10 +796,10 @@
                 ${
                   fees
                     ? `<div class="rp-lines">
-                  ${feeLine("Referral fee", fees.referralFee)}${feeLine("FBA fulfilment", fees.fulfillmentFee)}${feeLine("Closing fees", fees.closingFee)}${feeLine("Digital services", fees.digitalServicesFee)}${feeLine("Other Amazon fees", fees.otherAmazonFee)}${settings.includeStorageFee ? feeLine("Monthly storage estimate", fees.storageFee) : ""}
+                  ${feeLine("Referral fee", fees.referralFee)}${feeLine("FBA fulfilment", fees.fulfillmentFee)}${feeLine("Per-item fee", fees.perItemFee)}${feeLine("Closing fees", fees.closingFee)}${feeLine("Digital services", fees.digitalServicesFee)}${Core.normalizeNumber(fees.otherAmazonFee) ? feeLine("Other Amazon fees", fees.otherAmazonFee) : ""}${settings.includeStorageFee ? feeLine("Monthly storage estimate", fees.storageFee) : ""}
                   <div class="total"><span>Total Amazon fees</span><b>${Core.money(calc.amazonFees, marketplace)}</b></div>
                   <div><span>Estimated payout</span><b>${Core.money(calc.netPayout, marketplace)}</b></div>
-                </div>`
+                </div><p class="rp-note">Calculated by Amazon at ${Core.money(fees.calculatedAtPrice || inputs.salePrice, marketplace)}. Storage is ${settings.includeStorageFee ? "included" : "excluded"} in the total.</p>`
                     : `<div class="rp-empty">Amazon’s official fee result is required before profit is shown. No guessed fee table is used.</div>`
                 }
               </div>
@@ -951,8 +1007,10 @@
     shadow.querySelectorAll("[data-input]").forEach((node) =>
       node.addEventListener("change", async () => {
         inputs[node.dataset.input] = node.value;
-        if (node.dataset.input === "salePrice") loadFees(true);
-        else {
+        if (node.dataset.input === "salePrice") {
+          salePriceManuallyEdited = true;
+          loadFees(true);
+        } else {
           if (node.dataset.input === "productCost") await persistProductCost();
           render();
           openPanel();
@@ -1007,8 +1065,17 @@
       return;
     }
     const changedProduct = !product || next.asin !== product.asin;
+    const pagePriceChanged = Boolean(
+      !changedProduct &&
+      next.price &&
+      Core.normalizeDecimal(next.price) !==
+        Core.normalizeDecimal(product.price),
+    );
     product = next;
     if (changedProduct) {
+      feeRequestSequence += 1;
+      offerRequestSequence += 1;
+      salePriceManuallyEdited = false;
       fees = null;
       feesStatus = "idle";
       offers = {
@@ -1027,8 +1094,15 @@
         inboundShipping: settings.defaultInboundShipping,
         otherCost: settings.defaultOtherCost,
       };
-    } else if (!inputs.salePrice && product.price)
+    } else if (
+      product.price &&
+      (!inputs.salePrice || (pagePriceChanged && !salePriceManuallyEdited))
+    ) {
       inputs.salePrice = product.price;
+      fees = null;
+      feesStatus = "idle";
+      lastFingerprint = "";
+    }
     if (!host) {
       host = document.createElement("div");
       host.id = "rizpoint-fba-research-root";
@@ -1036,7 +1110,11 @@
       document.documentElement.appendChild(host);
     }
     render();
-    if (changedProduct && settings.autoLoadOfficialFees) loadFees();
+    if (
+      (changedProduct || (pagePriceChanged && !salePriceManuallyEdited)) &&
+      settings.autoLoadOfficialFees
+    )
+      loadFees();
     if (changedProduct && settings.autoLoadOffers) loadOffers();
   }
 
@@ -1070,6 +1148,8 @@
       Object.entries(message.inputs || {}).forEach(([key, value]) => {
         if (allowed.includes(key)) inputs[key] = String(value ?? "");
       });
+      if (Object.hasOwn(message.inputs || {}, "salePrice"))
+        salePriceManuallyEdited = true;
       (async () => {
         if (Object.hasOwn(message.inputs || {}, "productCost"))
           await persistProductCost();
