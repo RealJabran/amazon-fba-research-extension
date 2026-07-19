@@ -156,12 +156,47 @@
     settings = Core.mergeSettings(response?.settings);
   }
 
+  function canonicalizationKey(asin = Core.parseAsin(location.href)) {
+    return asin ? `rizpoint:clean-url:${marketplace.id}:${asin}` : "";
+  }
+
+  function canonicalizationAttempted(asin) {
+    try {
+      return sessionStorage.getItem(canonicalizationKey(asin)) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function markCanonicalizationAttempted(asin, attempted = true) {
+    const key = canonicalizationKey(asin);
+    if (!key) return;
+    try {
+      if (attempted) sessionStorage.setItem(key, "1");
+      else sessionStorage.removeItem(key);
+    } catch (_) {}
+  }
+
   function canonicalizeCurrentProductUrl() {
     if (!settings.canonicalizeProductUrls) return false;
+    const asin = Core.parseAsin(location.href);
     const canonical = Core.canonicalProductUrl(location.href);
-    if (!canonical || !Core.shouldCanonicalizeProductUrl(location.href))
+    if (
+      !asin ||
+      !canonical ||
+      !Core.shouldCanonicalizeProductUrl(
+        location.href,
+        canonicalizationAttempted(asin),
+      )
+    )
       return false;
-    location.replace(canonical);
+    markCanonicalizationAttempted(asin);
+    try {
+      location.replace(canonical);
+    } catch (error) {
+      markCanonicalizationAttempted(asin, false);
+      throw error;
+    }
     return true;
   }
 
@@ -182,6 +217,7 @@
       return;
     }
     if (enabled) canonicalizeCurrentProductUrl();
+    else markCanonicalizationAttempted(Core.parseAsin(location.href), false);
   }
 
   function currentTaxRate() {
@@ -1204,8 +1240,20 @@
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "sync" || !changes.settings?.newValue) return;
     settings = Core.mergeSettings(changes.settings.newValue);
+    if (!settings.canonicalizeProductUrls)
+      markCanonicalizationAttempted(Core.parseAsin(location.href), false);
     if (!canonicalizeCurrentProductUrl()) render();
   });
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const link = event.target.closest?.("a[href]");
+      const targetAsin = Core.parseAsin(link?.href || "");
+      if (targetAsin) markCanonicalizationAttempted(targetAsin, false);
+    },
+    true,
+  );
 
   (async () => {
     await loadSettings();

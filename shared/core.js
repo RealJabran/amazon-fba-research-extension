@@ -115,7 +115,8 @@
     }
   }
 
-  function shouldCanonicalizeProductUrl(value) {
+  function shouldCanonicalizeProductUrl(value, alreadyAttempted = false) {
+    if (alreadyAttempted) return false;
     const canonical = canonicalProductUrl(value);
     if (!canonical) return false;
     try {

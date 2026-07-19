@@ -31,6 +31,7 @@ test("builds a clean product URL without seller or referral context", () => {
     "https://www.amazon.ae/dp/B019OAWUZ4/",
   );
   assert.equal(Core.shouldCanonicalizeProductUrl(sellerUrl), true);
+  assert.equal(Core.shouldCanonicalizeProductUrl(sellerUrl, true), false);
   assert.equal(
     Core.shouldCanonicalizeProductUrl("https://www.amazon.ae/dp/B019OAWUZ4/"),
     false,

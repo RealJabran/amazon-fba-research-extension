@@ -4,6 +4,14 @@ All notable changes will be documented here.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-19
+
+### Fixed
+
+- Prevent repeated page reloads when Amazon redirects a clean `/dp/ASIN/` URL to its title-based product URL.
+- Clean each clicked product navigation only once per tab, then accept Amazon's resulting product URL.
+- Reset the one-time navigation guard when the feature is switched off or another product link is clicked.
+
 ## [0.2.5] - 2026-07-19
 
 ### Added
