@@ -35,6 +35,10 @@
   let refreshTimer;
   let aodRefreshTimer;
   let observedAodContainer;
+  let explorerHost;
+  let explorerShadow;
+  let explorerItems = [];
+  let explorerState = { sort: "sales-high", minimumSales: 0, query: "" };
 
   const text = (selector) =>
     document.querySelector(selector)?.textContent?.trim() || "";
@@ -43,6 +47,103 @@
     String(value || "")
       .replace(/\s+/g, " ")
       .trim();
+
+  function listingCards() {
+    const selectors = [
+      '[data-component-type="s-search-result"][data-asin]',
+      ".s-result-item[data-asin]",
+      '[data-testid="product-grid"] [data-asin]',
+      ".ProductGridItem__itemOuter__KUtvv [data-asin]",
+      ".storefront-product-card[data-asin]",
+    ];
+    return [...new Set(document.querySelectorAll(selectors.join(",")))].filter(
+      (node) => Core.parseAsin(node.dataset.asin),
+    );
+  }
+
+  function readListingCard(node) {
+    const cardText = clean(node.textContent);
+    const priceText = clean(
+      node.querySelector('.a-price .a-offscreen, [data-a-color="price"]')
+        ?.textContent || "",
+    );
+    return {
+      node,
+      asin: Core.parseAsin(node.dataset.asin),
+      title: clean(
+        node.querySelector("h2, h3, [data-cy='title-recipe']")?.textContent ||
+          node.querySelector("img[alt]")?.alt ||
+          "Amazon item",
+      ),
+      price: Core.normalizeNumber(priceText),
+      priceText,
+      monthlySales: Core.parseMonthlySales(cardText),
+    };
+  }
+
+  function applyExplorer() {
+    const ranked = Core.rankResearchItems(explorerItems, explorerState);
+    const shown = new Set(ranked.map((item) => item.asin));
+    explorerItems.forEach((item) => {
+      item.node.hidden = !shown.has(item.asin);
+      item.node.style.order = shown.has(item.asin)
+        ? String(
+            ranked.findIndex((rankedItem) => rankedItem.asin === item.asin),
+          )
+        : "";
+      let badge = item.node.querySelector(":scope > .rizpoint-listing-badge");
+      if (!badge) {
+        badge = document.createElement("div");
+        badge.className = "rizpoint-listing-badge";
+        badge.style.cssText =
+          "margin:6px;padding:7px 9px;border-radius:8px;background:#102a20;color:#fff;font:700 12px/1.3 Arial,sans-serif;position:relative;z-index:2";
+        item.node.prepend(badge);
+      }
+      const badgeText = `${item.priceText || "Price unavailable"} · ${item.monthlySales === null ? "Monthly sales not shown" : `${item.monthlySales.toLocaleString()}+ bought last month`}`;
+      if (badge.textContent !== badgeText) badge.textContent = badgeText;
+    });
+    const count = explorerShadow?.getElementById("rp-explorer-count");
+    if (count)
+      count.textContent = `${ranked.length} of ${explorerItems.length} items`;
+  }
+
+  function renderExplorer() {
+    const cards = listingCards();
+    if (!cards.length) {
+      explorerHost?.remove();
+      explorerHost = explorerShadow = null;
+      return;
+    }
+    explorerItems = cards.map(readListingCard);
+    if (!explorerHost) {
+      explorerHost = document.createElement("div");
+      explorerHost.id = "rizpoint-store-research-root";
+      explorerShadow = explorerHost.attachShadow({ mode: "open" });
+      document.documentElement.appendChild(explorerHost);
+    }
+    explorerShadow.innerHTML = `<style>
+      :host{all:initial}*{box-sizing:border-box}.bar{position:fixed;z-index:2147483645;left:50%;bottom:18px;transform:translateX(-50%);width:min(920px,calc(100vw - 28px));display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid #327054;border-radius:14px;background:#102a20;color:#fff;box-shadow:0 16px 46px #0006;font:12px Inter,Arial,sans-serif}.brand{display:grid;min-width:138px}.brand small{color:#91dfad;font-size:8px;letter-spacing:.14em;font-weight:900}.brand b{font-size:13px}.count{color:#c8d9d0;white-space:nowrap}select,input{height:34px;border:1px solid #527360;border-radius:8px;background:#fff;color:#17231d;padding:0 9px;font:12px Arial,sans-serif}input[type=search]{flex:1;min-width:100px}.sales{width:145px}.reset{height:34px;border:1px solid #5c7e6b;border-radius:8px;background:#1c4935;color:#fff;padding:0 12px;font-weight:700;cursor:pointer}@media(max-width:720px){.brand{display:none}.bar{flex-wrap:wrap}.count{width:100%}input[type=search]{order:3}}
+    </style><section class="bar" aria-label="RizPoint store and search research filters"><div class="brand"><small>RIZPOINT</small><b>Store Research</b></div><span id="rp-explorer-count" class="count"></span><input id="rp-explorer-query" type="search" placeholder="Title or ASIN" value="${escapeHtml(explorerState.query)}"><select id="rp-explorer-sort" aria-label="Sort products"><option value="sales-high">Most bought last month</option><option value="price-high">Highest price</option><option value="price-low">Lowest price</option></select><input id="rp-explorer-sales" class="sales" type="number" min="0" step="1" placeholder="Min units / month" value="${explorerState.minimumSales || ""}"><button id="rp-explorer-reset" class="reset">Reset</button></section>`;
+    explorerShadow.getElementById("rp-explorer-sort").value =
+      explorerState.sort;
+    explorerShadow.getElementById("rp-explorer-query").oninput = (event) => {
+      explorerState.query = event.currentTarget.value;
+      applyExplorer();
+    };
+    explorerShadow.getElementById("rp-explorer-sort").onchange = (event) => {
+      explorerState.sort = event.currentTarget.value;
+      applyExplorer();
+    };
+    explorerShadow.getElementById("rp-explorer-sales").oninput = (event) => {
+      explorerState.minimumSales = event.currentTarget.value;
+      applyExplorer();
+    };
+    explorerShadow.getElementById("rp-explorer-reset").onclick = () => {
+      explorerState = { sort: "sales-high", minimumSales: 0, query: "" };
+      renderExplorer();
+    };
+    applyExplorer();
+  }
 
   function parseRanks(bodyText) {
     const seen = new Set();
@@ -1129,9 +1230,14 @@
   }
 
   async function refresh() {
+    renderExplorer();
     const next = extractProduct();
     if (!next.asin) {
       host?.remove();
+      host = shadow = null;
+      overviewHost?.remove();
+      overviewHost = overviewShadow = null;
+      product = null;
       return;
     }
     const changedProduct = !product || next.asin !== product.asin;
@@ -1265,6 +1371,10 @@
         previousUrl = location.href;
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(refresh, 350);
+      }
+      if (!Core.parseAsin(location.href)) {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(refresh, 500);
       }
       const aodContainer = document.querySelector("#aod-container");
       if (aodContainer && aodContainer !== observedAodContainer) {
