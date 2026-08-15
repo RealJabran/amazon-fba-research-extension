@@ -20,6 +20,8 @@ It does **not** silently invent fees or claim that a partial seller sample repre
 - Product cost, preparation, inbound shipping, and other per-unit cost inputs.
 - Net payout, profit, ROI, and margin using deterministic fixed-point money math.
 - Observed FBA, FBM, and Amazon Retail offer classification.
+- Storefront and search-page research bar with instant title/ASIN search, highest/lowest price sorting, monthly-units sorting, and a minimum monthly-units filter.
+- At-a-glance price and Amazon-displayed “bought last month” badges on every detected product card.
 - Compact page-side widget, full research panel, toolbar popup, and settings page.
 - Per-field copy buttons and tab-separated **Copy row for sheet** export.
 - Configurable fields, automatic requests, storage treatment, and optional VAT planning reserve.
@@ -50,6 +52,10 @@ See [INSTALLATION.md](INSTALLATION.md) for screenshots-independent browser instr
 4. You enter the unit cost and any preparation, freight, or other expenses.
 5. Fixed-point calculations produce payout, profit, ROI, and margin.
 6. Copy any individual value or export one tab-separated row into Excel or Google Sheets.
+
+### Research a storefront or search result
+
+Visit an Amazon seller storefront, brand store, category, or search-results page. The **Store Research** bar appears at the bottom when product cards are detected. Use **Most bought last month** to surface demand, **Highest price** to find premium opportunities, enter a minimum units threshold, or search by title/ASIN. Monthly units are shown only when Amazon publishes that signal on the card; the extension does not estimate missing sales.
 
 ## Supported marketplaces
 

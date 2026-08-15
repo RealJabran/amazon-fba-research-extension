@@ -122,6 +122,33 @@ test("normalizes common marketplace number formats", () => {
   assert.equal(Core.normalizeNumber("AED 89.00"), 89);
 });
 
+test("parses Amazon monthly purchase signals", () => {
+  assert.equal(Core.parseMonthlySales("1K+ bought in past month"), 1000);
+  assert.equal(Core.parseMonthlySales("50+ sold in the last month"), 50);
+  assert.equal(Core.parseMonthlySales("No recent sales text"), null);
+});
+
+test("filters and ranks storefront research items", () => {
+  const items = [
+    { asin: "B000000001", title: "Alpha", price: 19, monthlySales: 500 },
+    { asin: "B000000002", title: "Beta", price: 80, monthlySales: 100 },
+    { asin: "B000000003", title: "Gamma", price: 40, monthlySales: 1000 },
+  ];
+  assert.deepEqual(
+    Core.rankResearchItems(items, { sort: "price-high" }).map(
+      (item) => item.asin,
+    ),
+    ["B000000002", "B000000003", "B000000001"],
+  );
+  assert.deepEqual(
+    Core.rankResearchItems(items, {
+      sort: "sales-high",
+      minimumSales: 500,
+    }).map((item) => item.asin),
+    ["B000000003", "B000000001"],
+  );
+});
+
 test("calculates deterministic profit, margin and ROI", () => {
   const result = Core.calculateProfit({
     salePrice: 30,

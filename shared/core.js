@@ -193,6 +193,49 @@
       });
   }
 
+  function parseMonthlySales(value) {
+    const source = String(value || "")
+      .replace(/[,+]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const match = source.match(
+      /([\d.]+)\s*([KMB])?\s*(?:\+)?\s*(?:bought|sold|purchased|orders?|units?)(?:\s+in)?\s+(?:the\s+)?(?:past|last)\s+month/i,
+    );
+    if (!match) return null;
+    const multiplier =
+      { K: 1e3, M: 1e6, B: 1e9 }[(match[2] || "").toUpperCase()] || 1;
+    const amount = Number(match[1]) * multiplier;
+    return Number.isFinite(amount) && amount >= 0 ? Math.round(amount) : null;
+  }
+
+  function rankResearchItems(items = [], options = {}) {
+    const minimumSales = Math.max(
+      0,
+      normalizeNumber(options.minimumSales) || 0,
+    );
+    const query = String(options.query || "")
+      .trim()
+      .toLowerCase();
+    const filtered = items.filter((item) => {
+      if (
+        query &&
+        !`${item.title || ""} ${item.asin || ""}`.toLowerCase().includes(query)
+      )
+        return false;
+      return !minimumSales || Number(item.monthlySales) >= minimumSales;
+    });
+    const direction = options.sort === "price-low" ? 1 : -1;
+    return filtered.sort((left, right) => {
+      if (options.sort === "sales-high")
+        return (
+          (Number(right.monthlySales) || -1) - (Number(left.monthlySales) || -1)
+        );
+      return (
+        ((Number(left.price) || -1) - (Number(right.price) || -1)) * direction
+      );
+    });
+  }
+
   function categoryIntelligence(breadcrumbs = [], ranks = []) {
     const cleanBreadcrumbs = breadcrumbs
       .map((item) =>
@@ -512,6 +555,8 @@
     amazonOfferPageUrls,
     amazonOfferFilterUrls,
     parseRankText,
+    parseMonthlySales,
+    rankResearchItems,
     categoryIntelligence,
     classifyFulfillment,
     resolveOfferTotal,
